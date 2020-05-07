@@ -16,10 +16,10 @@ import copy
 from apex import amp
 
 
-class Agent(Algorithm):
+class PG(Algorithm):
 
     def __init__(self, *argv, **kwargs):
-        super(Agent, self).__init__()
+        super(PG, self).__init__()
 
         self.device = exp.device
 

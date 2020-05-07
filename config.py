@@ -34,7 +34,7 @@ parser = argparse.ArgumentParser(description=project_name)
 
 # global parameters
 
-parser.add_argument('--algorithm', type=str, default='ddpg', help='[vanilla|ddpg]')
+parser.add_argument('--algorithm', type=str, default='pg', help='[pg|ddpg|td3|ppo|trpo|sac|rbi|egl]')
 parser.add_argument('--num', type=int, default=-1, help='Resume experiment number, set -1 for new experiment')
 parser.add_argument('--cpu-workers', type=int, default=4, help='How many CPUs will be used for the data loading')
 parser.add_argument('--cuda', type=int, default=0, help='GPU Number')
@@ -64,7 +64,13 @@ parser.add_argument('--weight-decay', type=float, default=0., help='L2 regulariz
 parser.add_argument('--dropout', type=float, default=0., help='Dropout regularization coefficient')
 parser.add_argument('--clip-p', type=float, default=0., help='Clip Pi Gradient L2 norm')
 parser.add_argument('--clip-q', type=float, default=0., help='Clip Pi Gradient L2 norm')
+
+# rbi parameters
 parser.add_argument('--rbi-samples', type=int, default=100, help='policy samples for rbi training')
+parser.add_argument('--cmin', type=float, default=0.5, metavar='c_min', help='Lower reroute threshold')
+parser.add_argument('--cmax', type=float, default=1.5, metavar='c_max', help='Upper reroute threshold')
+parser.add_argument('--rbi-epsilon', type=float, default=0.01, metavar='ε', help='Uniform sampling in RBI update')
+parser.add_argument('--rbi-greed', type=float, default=0.1, help='Greedy part in RBI update')
 
 parser.add_argument('--total-steps', type=int, default=int(1e6), metavar='STEPS', help='Total number of environment steps')
 parser.add_argument('--train-epoch', type=int, default=500, metavar='BATCHES', help='Length of each epoch (in batches)')

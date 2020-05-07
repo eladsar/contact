@@ -403,10 +403,24 @@ class QVanilla(nn.Module):
 
     def forward(self, s, a):
         s = self.s_net(s)
+
+        if len(a.shape) > len(s.shape):
+            n, b, _ = a.shape
+            s = s.unsqueeze(0)
+            s = s.expand(n, b, -1)
+            s = s.view(n * b, -1)
+            a = a.view(n * b, -1)
+
         x = self.head(torch.cat([s, a], dim=1))
+
+        if len(a.shape) > len(s.shape):
+            x = x.view(n, b, -1)
 
         return x.squeeze(1)
 
+
+def atanh(x):
+    return 0.5 * torch.log((1 + x) / (1 - x))
 
 class Deterministic(torch.distributions.distribution.Distribution):
 
@@ -414,20 +428,37 @@ class Deterministic(torch.distributions.distribution.Distribution):
         super(Deterministic, self).__init__()
         self.x = x
 
-    def rsample(self):
-        return self.x
+    def rsample(self, sample_shape=torch.Size([])):
 
-    def log_prob(self):
+        expanded = sample_shape + self.x.shape
+
+        x = self.x.view(torch.Size([1] * len(sample_shape)) + self.x.shape)
+        x = x.expand(expanded)
+
+        return x
+
+    def log_prob(self, value):
         return torch.ones_like(self.x)
 
     def entropy(self):
         return torch.zeros_like(self.x)
 
 
+def identity(x):
+    return x
+
+
 class Policy(nn.Module):
 
-    def __init__(self, distribution):
+    def __init__(self, distribution, bounded=True):
         super(Policy, self).__init__()
+
+        if bounded:
+            self.squash = torch.tanh
+            self.desquash = atanh
+        else:
+            self.squash = identity
+            self.desquash = identity
 
         if distribution == 'deterministic':
             self.generator = Deterministic
@@ -435,7 +466,6 @@ class Policy(nn.Module):
             self.generator = getattr(torch.distributions, distribution)
 
         self.distribution = None
-        self.sample = None
 
     def kl_divergence(self, args, dirction='forward'):
 
@@ -445,26 +475,48 @@ class Policy(nn.Module):
         else:
             return torch.distributions.kl_divergence(q, self.distribution)
 
-    @property
-    def log_prob(self):
-        return self.distribution.logprob(self.sample)
+    def _sample(self, method, n=1):
 
-    @property
-    def entropy(self):
-        return self.distribution.entropy(self.sample)
+        if type(n) is int:
+            n = torch.Size([n])
+
+        sample = getattr(self.distribution, method)(n)
+        a = self.squash(sample)
+        return a
+
+    def rsample(self, n=1):
+        return self._sample('rsample', n=n)
+
+    def sample(self, n=1):
+        return self._sample('sample', n=n)
+
+    def log_prob(self, a):
+
+        distribution = self.distribution.expand(a.shape)
+
+        sample = self.desquash(a)
+        return distribution.logprob(sample)
+
+    def entropy(self, a):
+
+        distribution = self.distribution.expand(a.shape)
+        sample = self.desquash(a)
+        return distribution.entropy(sample)
 
     def forward(self, *args):
 
         self.distribution = self.generator(*args)
-        self.sample = self.distribution.rsample()
-        return self.sample
+        a = self.sample()
+
+        return a
 
 
 class PiVanilla(Policy):
 
-    def __init__(self, states, actions, hidden_1=400, hidden_2=300, distribution='deterministic'):
-        super(PiVanilla, self).__init__(distribution)
+    def __init__(self, states, actions, hidden_1=400, hidden_2=300, distribution='deterministic', bounded=True):
+        super(PiVanilla, self).__init__(distribution, bounded=bounded)
 
+        self.form = distribution
         self.s_net = nn.Sequential(nn.Linear(states, hidden_1),
                                    nn.LayerNorm(hidden_1),
                                    nn.ReLU(),
@@ -475,7 +527,7 @@ class PiVanilla(Policy):
 
         self.mu_head = nn.Linear(hidden_2, actions)
 
-        if distribution == 'gaussian' or distribution == 'uniform':
+        if distribution in ['Normal', 'Uniform']:
             self.std_head = nn.Linear(hidden_2, actions)
 
         fan_in_uniform_init(self.s_net[0].weight)
@@ -490,12 +542,12 @@ class PiVanilla(Policy):
         nn.init.uniform_(self.std_head.weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
         nn.init.uniform_(self.std_head.bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
 
-    def forward(self, s, noise=0):
+    def forward(self, s):
         s = self.s_net(s)
 
         mu = self.mu_head(s)
 
-        if self.method == 'gaussian' or self.method == 'uniform':
+        if self.form in ['Normal', 'Uniform']:
             std = self.std_head(s)
             std = std.exp()
             args = mu, std
@@ -503,9 +555,8 @@ class PiVanilla(Policy):
             args = mu,
 
         a = super(PiVanilla, self).forward(*args)
-        a = torch.tanh(a + noise)
 
-        return a, args
+        return a
 
 
 class Actor(nn.Module):

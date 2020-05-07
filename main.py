@@ -3,9 +3,10 @@ import numpy as np
 from loguru import logger
 import pandas as pd
 import os
-from agent import Agent
+from pg import PG
 from ddpg import DDPG
 from td3 import TD3
+from rbi import RBI
 from tqdm import tqdm
 from collections import defaultdict
 from environment import BulletEnv
@@ -13,12 +14,14 @@ from environment import BulletEnv
 
 def get_algorithm(*argv, **kwargs):
 
-    if args.algorithm == 'agent':
-        return Agent(*argv, **kwargs)
+    if args.algorithm == 'pg':
+        return PG(*argv, **kwargs)
     if args.algorithm == 'ddpg':
         return DDPG(*argv, **kwargs)
     if args.algorithm == 'td3':
         return TD3(*argv, **kwargs)
+    if args.algorithm == 'rbi':
+        return RBI(*argv, **kwargs)
     raise NotImplementedError
 
 

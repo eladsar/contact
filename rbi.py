@@ -19,7 +19,44 @@ from operator import itemgetter
 from collections import namedtuple
 from utils import soft_update, OrnsteinUhlenbeckActionNoise, RandomNoise
 
-# Sample = namedtuple('Sample', ('s', 'a', 'r', 't', 'stag', 'pi'))
+
+def max_reroute(s, pi_net, q_net, n=100, cmin=0.5, cmax=1.5, greed=0.1, epsilon=0.01):
+
+    pi_net(s)
+
+    with torch.no_grad():
+        beta = pi_net.sample(n)
+
+    _, b, na = beta.shape
+
+    s = s.unsqueeze(0).expand(n, *s.shape)
+    s = s.view(n * b, *s.shape[2:])
+    a = beta.view(n * b, na)
+
+    with torch.no_grad():
+        q = q_net(s, a)
+
+    q = q.view(n, b, 1)
+
+    rank = torch.argsort(q, dim=0, descending=True)
+    w = cmin * torch.ones_like(beta)
+    m = int((1 - cmin) * n / (cmax - cmin))
+
+    w[rank[:m]] += (cmax - cmin)
+    w[m] += (1 - cmin) * n - m * (cmax - cmin)
+
+    w -= greed
+    w[rank[0]] += greed * n
+
+    w = w * (1 - epsilon) + epsilon
+
+    w = w.permute(1, 2, 0)
+    beta = beta.permute(1, 2, 0)
+
+    prob = torch.distributions.Categorical(probs=w)
+
+    a = torch.gather(beta, 2, prob.sample().unsqueeze(2)).squeeze(2)
+    return a, (beta, w)
 
 
 class RBI(Algorithm):
@@ -31,10 +68,10 @@ class RBI(Algorithm):
         n_a = env.env.action_space.shape[0]
         n_s = env.env.observation_space.shape[0]
 
-        pi_net = PiNet(n_s, n_a, method='gaussian')
+        pi_net = PiNet(n_s, n_a, distribution='Normal')
         self.pi_net = pi_net.to(self.device)
 
-        pi_target = PiNet(n_s, n_a, method='gaussian')
+        pi_target = PiNet(n_s, n_a, distribution='Normal')
         self.pi_target = pi_target.to(self.device)
         self.load_state_dict(self.pi_target, self.pi_net.state_dict())
 
@@ -77,8 +114,7 @@ class RBI(Algorithm):
             if self.env_steps >= self.total_steps:
                 break
 
-            for k in state.keys():
-                v = getattr(state, k)
+            for k, v in state.items():
                 self.replay_buffer[k].append(v)
 
             if not i % self.steps_per_train and i >= self.min_replay_buffer:
@@ -97,8 +133,8 @@ class RBI(Algorithm):
                               'stag': torch.cat(index_n(self.replay_buffer['s'])),
                               'r': torch.cat(index_0(self.replay_buffer['r'])),
                               't': torch.cat(index_0(self.replay_buffer['t'])),
-                              'pi': (torch.cat(index_0(self.replay_buffer['pi_mu'])),
-                                     torch.cat(index_0(self.replay_buffer['pi_std'])))
+                              'beta': torch.cat(index_0(self.replay_buffer['beta'])),
+                               'w': torch.cat(index_0(self.replay_buffer['w']))
                               }
                     yield sample
 
@@ -119,17 +155,14 @@ class RBI(Algorithm):
                 noise = self.noise()
                 with torch.no_grad():
 
-                    pi_mu, pi_std = self.pi_net(self.env.s) + noise
+                    a, (beta, w) = max_reroute(self.env.s, self.pi_net, self.q_net_1, self.rbi_samples,
+                                               self.cmin, self.cmax, self.rbi_greed, self.rbi_epsilon)
 
-                    # if self.env_steps >= self.warmup_steps:
-                    #
-                    #     # a = self.pi_net(self.env.s, noise=noise)
-                    # else:
-                    #     a = noise
+                a = torch.clamp(a + noise, min=-1, max=1)
 
-                state = self.env(torch.clamp(a, min=-1, max=1))
-                state['pi_mu'] = pi_mu
-                state['pi_std'] = pi_std
+                state = self.env(a)
+                state['beta'] = beta
+                state['w'] = w
                 # state = self.env(a)
                 yield state
                 self.eval()
@@ -143,17 +176,18 @@ class RBI(Algorithm):
         for i, sample in tqdm(enumerate(self.sample())):
             i += 1
 
-            s, a, r, t, stag, pi = sample['s'], sample['a'], sample['r'], sample['t'], sample['stag'], sample['pi']
+            s, a, r, t, stag, beta, w = [sample[k] for k in ['s', 'a', 'r', 't', 'stag', 'beta', 'w']]
 
             self.train()
 
             with torch.no_grad():
-                pi_tag = self.pi_target(stag)
+                self.pi_target(stag)
+                pi_tag = self.pi_target.sample(self.rbi_samples)
                 q_target_1 = self.q_target_1(stag, pi_tag)
                 q_target_2 = self.q_target_2(stag, pi_tag)
 
             q_target = torch.min(q_target_1, q_target_2)
-            g = r + (1 - t) * self.gamma ** self.n_steps * q_target
+            g = r + (1 - t) * self.gamma ** self.n_steps * (q_target * pi_tag).sum(dim=0)
 
             qa = self.q_net_1(s, a)
             loss_q = F.mse_loss(qa, g, reduction='mean')
@@ -175,9 +209,13 @@ class RBI(Algorithm):
 
             if not i % self.delayed_policy_update:
 
-                pi_hat, (mu, std) = self.pi_net(s)
+                beta = beta.permute(2, 0, 1)
+                w = w.permute(2, 0, 1)
 
-                loss_p = self.pi_net.kl_divergence(*pi)
+                self.pi_net(s)
+                log_pi = self.pi_net.log_prob(beta)
+
+                loss_p = (- log_pi * w).sum(dim=0)
 
                 self.optimizer_p.zero_grad()
                 loss_p.backward()
