@@ -4,7 +4,35 @@ import gym
 import pybullet_envs
 from collections import namedtuple, defaultdict
 
-State = namedtuple('State', ('s', 'a', 'r', 't', 'k'))
+# State = namedtuple('State', ('s', 'a', 'r', 't', 'k', 'stag'))
+
+
+class NormalizedActions(gym.ActionWrapper):
+
+    def action(self, action):
+        """
+        Normalizes the actions to be in between action_space.high and action_space.low.
+        If action_space.low == -action_space.high, this is equals to action_space.high*action.
+
+        :param action:
+        :return: normalized action
+        """
+        action = (action + 1) / 2  # [-1, 1] => [0, 1]
+        action *= (self.action_space.high - self.action_space.low)
+        action += self.action_space.low
+        return action
+
+    def reverse_action(self, action):
+        """
+        Reverts the normalization
+
+        :param action:
+        :return:
+        """
+        action -= self.action_space.low
+        action /= (self.action_space.high - self.action_space.low)
+        action = action * 2 - 1
+        return action
 
 
 class Environment(object):
@@ -61,7 +89,7 @@ class BulletEnv(Environment):
         self.torch = torch.cuda if cuda else torch
         self.name = name
         self.render_mode = render_mode
-        self.env = gym.make(name, render=render)
+        self.env = NormalizedActions(gym.make(name, render=render))
 
         self.n_steps = n_steps
         self.gamma = gamma ** (n_steps - self.torch.FloatTensor(n_steps).fill_(1).cumsum(0))
@@ -129,12 +157,13 @@ class BulletEnv(Environment):
         # Process state
         a_real = self.process_action(a)
         s, r, t, _ = self.env.step(a_real)
-        self.t = t
         self.k += 1
 
+        self.t = t
         self.score += r
 
         if t:
+
             self.statistics['scalar']['score'].append(self.score)
             self.statistics['scalar']['length'].append(float(self.k))
             self.statistics['scalar']['avg_r'].append(self.score / float(self.k))
@@ -142,12 +171,13 @@ class BulletEnv(Environment):
         if self.render:
             self.image = self.env.render(mode=self.render_mode)
 
+        s = self.process_state(s)
         r = self.process_reward(r)
-        state = State(s=self.s, r=r, t=self.torch.FloatTensor([int(self.t)]),
-                      k=self.torch.LongTensor([self.k]), a=a)
 
-        self.t = t
-        self.s = self.process_state(s)
+        state = {'s': self.s, 'r': r, 't': self.torch.FloatTensor([int(t)]),
+                 'k': self.torch.LongTensor([self.k]), 'a': a, 'stag': s}
+
+        self.s = s
 
         return state
 

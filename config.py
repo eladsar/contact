@@ -62,17 +62,24 @@ parser.add_argument('--lr-p', type=float, default=1e-4, metavar='α', help='lear
 parser.add_argument('--lr-q', type=float, default=1e-3, metavar='α', help='learning rate for the Q-function network')
 parser.add_argument('--weight-decay', type=float, default=0., help='L2 regularization coefficient')
 parser.add_argument('--dropout', type=float, default=0., help='Dropout regularization coefficient')
-parser.add_argument('--clip', type=float, default=0., help='Clip Gradient L2 norm')
+parser.add_argument('--clip-p', type=float, default=0., help='Clip Pi Gradient L2 norm')
+parser.add_argument('--clip-q', type=float, default=0., help='Clip Pi Gradient L2 norm')
+parser.add_argument('--rbi-samples', type=int, default=100, help='policy samples for rbi training')
 
-parser.add_argument('--epochs', type=int, default=100, metavar='STEPS', help='Total number of backward steps')
-parser.add_argument('--train-epoch', type=int, default=50, metavar='BATCHES', help='Length of each epoch (in batches)')
-parser.add_argument('--target-update', type=int, default=100, metavar='BATCHES', help='update targets every number of steps')
+parser.add_argument('--total-steps', type=int, default=int(1e6), metavar='STEPS', help='Total number of environment steps')
+parser.add_argument('--train-epoch', type=int, default=500, metavar='BATCHES', help='Length of each epoch (in batches)')
+parser.add_argument('--target-update', type=int, default=1000, metavar='BATCHES', help='update targets every number of steps')
 parser.add_argument('--test-epoch', type=int, default=10, metavar='BATCHES', help='Length of test epoch (in batches)')
 parser.add_argument('--batch', type=int, default=64, help='Batch Size')
 
-parser.add_argument('--warmup-steps', type=int, default=10000, help='warm-up random steps')
-parser.add_argument('--min-replay-buffer', type=int, default=1000, help='minimal replay buffer size')
-parser.add_argument('--start-policy-update', type=int, default=100, help='minimal Q-learning steps before policy update')
+# parser.add_argument('--warmup-steps', type=int, default=2000, help='warm-up random steps')
+# parser.add_argument('--min-replay-buffer', type=int, default=1000, help='minimal replay buffer size')
+# parser.add_argument('--start-policy-update', type=int, default=200, help='minimal Q-learning steps before policy update')
+
+parser.add_argument('--warmup-steps', type=int, default=0, help='warm-up random steps')
+parser.add_argument('--min-replay-buffer', type=int, default=200, help='minimal replay buffer size')
+parser.add_argument('--start-policy-update', type=int, default=0, help='minimal Q-learning steps before policy update')
+
 
 # RL parameters
 
@@ -80,11 +87,11 @@ parser.add_argument('--gamma', type=float, default=0.99, help='Discount Factor')
 parser.add_argument('--epsilon', type=float, default=0.2, metavar='ε', help='exploration parameter')
 parser.add_argument('--epsilon-warmup', type=float, default=0.2, metavar='ε', help='warm-up exploration parameter')
 parser.add_argument("--tau", default=0.001, help="Update factor for the soft update of the target networks")
-parser.add_argument('--steps-per-train', type=int, default=32, metavar='STEPS', help='number of steps between training epochs')
+parser.add_argument('--steps-per-train', type=int, default=1, metavar='STEPS', help='number of steps between training epochs')
 parser.add_argument('--consecutive-train', type=int, default=1, metavar='STEPS', help='number of consecutive training iterations')
-parser.add_argument('--replay-memory-size', type=int, default=10000, help='Total replay memory size')
+parser.add_argument('--replay-memory-size', type=int, default=100000, help='Total replay memory size')
 parser.add_argument('--n-steps', type=int, default=1, metavar='STEPS', help='Number of steps for multi-step learning')
-parser.add_argument('--delayed-policy-update', type=int, default=2, metavar='STEPS', help='steps between policy updates')
+parser.add_argument('--delayed-policy-update', type=int, default=1, metavar='STEPS', help='steps between policy updates')
 
 args = parser.parse_args()
 seed = args.seed
@@ -132,7 +139,7 @@ class Experiment(object):
         if "gpu" in socket.gethostname():
             self.root_dir = os.path.join('/home/dsi/', username, 'data', project_name)
         elif "root" == username:
-            self.root_dir = os.path.join('/workspace/data', project_name)
+            self.root_dir = os.path.join('/data/data', project_name)
         else:
             self.root_dir = os.path.join('/data/', username, project_name)
 

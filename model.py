@@ -7,6 +7,8 @@ from collections import namedtuple
 from torchvision import transforms
 from torch.nn.utils import spectral_norm
 import math
+import numpy as np
+import itertools
 
 
 class MultipleOptimizer:
@@ -146,33 +148,33 @@ class LinearHead(nn.Module):
         return y
 
 
-class FCNet(nn.Module):
-
-    def __init__(self, n=1):
-        super(FCNet, self).__init__()
-        #         self.fc = nn.Sequential(nn.Linear(actions, layer, bias=True),
-        #                                 activation(),
-        #                                 nn.Linear(layer, layer, bias=True),
-        #                                 activation(),
-        #                                 nn.Linear(layer, layer//2, bias=True),
-        #                                 activation(),
-        #                                 nn.Linear(layer//2, n, bias=True))
-
-        self.fc = nn.Sequential(nn.Linear(actions, layer, bias=True),
-                                SeqResBlock(n_res, layer),
-                                nn.ReLU(),
-                                nn.Linear(layer, n, bias=True))
-
-        self.n = n
-
-        init_weights(self, init='ortho')
-
-    def forward(self, x):
-        x = self.fc(x)
-        if self.n == 1:
-            x = x.squeeze(1)
-
-        return x
+# class FCNet(nn.Module):
+#
+#     def __init__(self, n=1):
+#         super(FCNet, self).__init__()
+#         #         self.fc = nn.Sequential(nn.Linear(actions, layer, bias=True),
+#         #                                 activation(),
+#         #                                 nn.Linear(layer, layer, bias=True),
+#         #                                 activation(),
+#         #                                 nn.Linear(layer, layer//2, bias=True),
+#         #                                 activation(),
+#         #                                 nn.Linear(layer//2, n, bias=True))
+#
+#         self.fc = nn.Sequential(nn.Linear(actions, layer, bias=True),
+#                                 SeqResBlock(n_res, layer),
+#                                 nn.ReLU(),
+#                                 nn.Linear(layer, n, bias=True))
+#
+#         self.n = n
+#
+#         init_weights(self, init='ortho')
+#
+#     def forward(self, x):
+#         x = self.fc(x)
+#         if self.n == 1:
+#             x = x.squeeze(1)
+#
+#         return x
 
 
 class SplineEmbedding(nn.Module):
@@ -362,45 +364,238 @@ class PiSpline(nn.Module):
         return x
 
 
+def fan_in_uniform_init(tensor, fan_in=None):
+    """Utility function for initializing actor and critic"""
+    if fan_in is None:
+        fan_in = tensor.size(-1)
+
+    w = 1. / np.sqrt(fan_in)
+    nn.init.uniform_(tensor, -w, w)
+
+
+WEIGHTS_FINAL_INIT = 3e-3
+BIAS_FINAL_INIT = 3e-4
+
+
 class QVanilla(nn.Module):
 
-    def __init__(self, states, actions, hidden_s=256, hidden_a=32):
+    def __init__(self, states, actions, hidden_1=400, hidden_2=300):
         super(QVanilla, self).__init__()
 
-        self.s_net = nn.Sequential(nn.Linear(states, hidden_s),
+        self.s_net = nn.Sequential(nn.Linear(states, hidden_1),
+                                   nn.LayerNorm(hidden_1),
                                    nn.ReLU(),)
 
-        self.a_net = nn.Sequential(nn.Linear(actions, hidden_a),
-                                   nn.ReLU(),)
-
-        self.head = nn.Sequential(nn.Linear(hidden_s + hidden_a, hidden_s),
+        self.head = nn.Sequential(nn.Linear(hidden_1 + actions, hidden_2),
+                                  nn.LayerNorm(hidden_2),
                                   nn.ReLU(),
-                                  nn.Linear(hidden_s, 1),
+                                  nn.Linear(hidden_2, 1),
                                   )
+
+        fan_in_uniform_init(self.s_net[0].weight)
+        fan_in_uniform_init(self.s_net[0].bias)
+
+        fan_in_uniform_init(self.head[0].weight)
+        fan_in_uniform_init(self.head[0].bias)
+
+        nn.init.uniform_(self.head[-1].weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
+        nn.init.uniform_(self.head[-1].bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
 
     def forward(self, s, a):
         s = self.s_net(s)
-        a = self.a_net(a)
-
         x = self.head(torch.cat([s, a], dim=1))
 
         return x.squeeze(1)
 
 
-class PiVanilla(nn.Module):
+class Deterministic(torch.distributions.distribution.Distribution):
 
-    def __init__(self, states, actions, layer=128):
-        super(PiVanilla, self).__init__()
+    def __init__(self, x):
+        super(Deterministic, self).__init__()
+        self.x = x
 
-        self.s_net = nn.Sequential(nn.Linear(states, layer),
+    def rsample(self):
+        return self.x
+
+    def log_prob(self):
+        return torch.ones_like(self.x)
+
+    def entropy(self):
+        return torch.zeros_like(self.x)
+
+
+class Policy(nn.Module):
+
+    def __init__(self, distribution):
+        super(Policy, self).__init__()
+
+        if distribution == 'deterministic':
+            self.generator = Deterministic
+        else:
+            self.generator = getattr(torch.distributions, distribution)
+
+        self.distribution = None
+        self.sample = None
+
+    def kl_divergence(self, args, dirction='forward'):
+
+        q = self.generator(args)
+        if dirction == 'forward':
+            return torch.distributions.kl_divergence(self.distribution, q)
+        else:
+            return torch.distributions.kl_divergence(q, self.distribution)
+
+    @property
+    def log_prob(self):
+        return self.distribution.logprob(self.sample)
+
+    @property
+    def entropy(self):
+        return self.distribution.entropy(self.sample)
+
+    def forward(self, *args):
+
+        self.distribution = self.generator(*args)
+        self.sample = self.distribution.rsample()
+        return self.sample
+
+
+class PiVanilla(Policy):
+
+    def __init__(self, states, actions, hidden_1=400, hidden_2=300, distribution='deterministic'):
+        super(PiVanilla, self).__init__(distribution)
+
+        self.s_net = nn.Sequential(nn.Linear(states, hidden_1),
+                                   nn.LayerNorm(hidden_1),
                                    nn.ReLU(),
-                                   nn.Linear(layer, actions),)
+                                   nn.Linear(hidden_1, hidden_2),
+                                   nn.LayerNorm(hidden_2),
+                                   nn.ReLU(),
+                                  )
 
-    def forward(self, s):
-        a = self.s_net(s)
-        a = torch.tanh(a)
+        self.mu_head = nn.Linear(hidden_2, actions)
 
-        return a
+        if distribution == 'gaussian' or distribution == 'uniform':
+            self.std_head = nn.Linear(hidden_2, actions)
+
+        fan_in_uniform_init(self.s_net[0].weight)
+        fan_in_uniform_init(self.s_net[0].bias)
+
+        fan_in_uniform_init(self.s_net[3].weight)
+        fan_in_uniform_init(self.s_net[3].bias)
+
+        nn.init.uniform_(self.mu_head.weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
+        nn.init.uniform_(self.mu_head.bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
+
+        nn.init.uniform_(self.std_head.weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
+        nn.init.uniform_(self.std_head.bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
+
+    def forward(self, s, noise=0):
+        s = self.s_net(s)
+
+        mu = self.mu_head(s)
+
+        if self.method == 'gaussian' or self.method == 'uniform':
+            std = self.std_head(s)
+            std = std.exp()
+            args = mu, std
+        else:
+            args = mu,
+
+        a = super(PiVanilla, self).forward(*args)
+        a = torch.tanh(a + noise)
+
+        return a, args
+
+
+class Actor(nn.Module):
+    def __init__(self, num_inputs, action_space, hidden_size=(400, 300)):
+        super(Actor, self).__init__()
+        num_outputs = action_space
+
+        # Layer 1
+        self.linear1 = nn.Linear(num_inputs, hidden_size[0])
+        self.ln1 = nn.LayerNorm(hidden_size[0])
+
+        # Layer 2
+        self.linear2 = nn.Linear(hidden_size[0], hidden_size[1])
+        self.ln2 = nn.LayerNorm(hidden_size[1])
+
+        # Output Layer
+        self.mu = nn.Linear(hidden_size[1], num_outputs)
+
+        # Weight Init
+        fan_in_uniform_init(self.linear1.weight)
+        fan_in_uniform_init(self.linear1.bias)
+
+        fan_in_uniform_init(self.linear2.weight)
+        fan_in_uniform_init(self.linear2.bias)
+
+        nn.init.uniform_(self.mu.weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
+        nn.init.uniform_(self.mu.bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
+
+    def forward(self, inputs):
+        x = inputs
+
+        # Layer 1
+        x = self.linear1(x)
+        x = self.ln1(x)
+        x = F.relu(x)
+
+        # Layer 2
+        x = self.linear2(x)
+        x = self.ln2(x)
+        x = F.relu(x)
+
+        # Output
+        mu = torch.tanh(self.mu(x))
+        return mu
+
+
+class Critic(nn.Module):
+    def __init__(self, num_inputs, action_space, hidden_size=(400, 300)):
+        super(Critic, self).__init__()
+        num_outputs = action_space
+
+        # Layer 1
+        self.linear1 = nn.Linear(num_inputs, hidden_size[0])
+        self.ln1 = nn.LayerNorm(hidden_size[0])
+
+        # Layer 2
+        # In the second layer the actions will be inserted also
+        self.linear2 = nn.Linear(hidden_size[0] + num_outputs, hidden_size[1])
+        self.ln2 = nn.LayerNorm(hidden_size[1])
+
+        # Output layer (single value)
+        self.V = nn.Linear(hidden_size[1], 1)
+
+        # Weight Init
+        fan_in_uniform_init(self.linear1.weight)
+        fan_in_uniform_init(self.linear1.bias)
+
+        fan_in_uniform_init(self.linear2.weight)
+        fan_in_uniform_init(self.linear2.bias)
+
+        nn.init.uniform_(self.V.weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
+        nn.init.uniform_(self.V.bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
+
+    def forward(self, inputs, actions):
+        x = inputs
+
+        # Layer 1
+        x = self.linear1(x)
+        x = self.ln1(x)
+        x = F.relu(x)
+
+        # Layer 2
+        x = torch.cat((x, actions), 1)  # Insert the actions
+        x = self.linear2(x)
+        x = self.ln2(x)
+        x = F.relu(x)
+
+        # Output
+        V = self.V(x)
+        return V.squeeze(1)
 
 
 # QNet = QSpline
@@ -409,6 +604,8 @@ class PiVanilla(nn.Module):
 QNet = QVanilla
 PiNet = PiVanilla
 
+# QNet = Critic
+# PiNet = Actor
 
 #
 # class S2ANet(nn.Module):

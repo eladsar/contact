@@ -5,6 +5,7 @@ import pandas as pd
 import os
 from agent import Agent
 from ddpg import DDPG
+from td3 import TD3
 from tqdm import tqdm
 from collections import defaultdict
 from environment import BulletEnv
@@ -16,6 +17,8 @@ def get_algorithm(*argv, **kwargs):
         return Agent(*argv, **kwargs)
     if args.algorithm == 'ddpg':
         return DDPG(*argv, **kwargs)
+    if args.algorithm == 'td3':
+        return TD3(*argv, **kwargs)
     raise NotImplementedError
 
 
@@ -51,7 +54,7 @@ def reinforcement(alg):
 
     # test_results = next(evaluation)
     for epoch, train_results in enumerate(alg.train()):
-        n = n_offset + (epoch + 1) * args.train_epoch
+        n = n_offset + alg.env_steps + 1
 
         exp.log_data(train_results, None, n, alg=alg if args.lognet else None)
 
