@@ -1,7 +1,7 @@
 import numpy as np
 import torch
-import gym
 import pybullet_envs
+import gym
 from collections import namedtuple, defaultdict
 
 # State = namedtuple('State', ('s', 'a', 'r', 't', 'k', 'stag'))
@@ -89,7 +89,11 @@ class BulletEnv(Environment):
         self.torch = torch.cuda if cuda else torch
         self.name = name
         self.render_mode = render_mode
-        self.env = NormalizedActions(gym.make(name, render=render))
+        # self.env = NormalizedActions(gym.make(name, render=render))
+        self.env = gym.make(name, render=render)
+
+        self.observation_space = self.env.observation_space
+        self.action_space = self.env.action_space
 
         self.n_steps = n_steps
         self.gamma = gamma ** (n_steps - self.torch.FloatTensor(n_steps).fill_(1).cumsum(0))
@@ -152,7 +156,12 @@ class BulletEnv(Environment):
 
         return a
 
-    def step(self, a):
+    def step(self, a=None):
+
+        if a is None:
+            a = torch.FloatTensor(self.action_space.sample()).unsqueeze(0)
+        if len(a.shape) != 2:
+            a = a.unsqueeze(0)
 
         # Process state
         a_real = self.process_action(a)
@@ -160,6 +169,7 @@ class BulletEnv(Environment):
         self.k += 1
 
         self.t = t
+        actor_t = t if self.k < self.env._max_episode_steps else False
         self.score += r
 
         if t:
@@ -174,7 +184,7 @@ class BulletEnv(Environment):
         s = self.process_state(s)
         r = self.process_reward(r)
 
-        state = {'s': self.s, 'r': r, 't': self.torch.FloatTensor([int(t)]),
+        state = {'s': self.s, 'r': r, 't': self.torch.FloatTensor([int(actor_t)]),
                  'k': self.torch.LongTensor([self.k]), 'a': a, 'stag': s}
 
         self.s = s

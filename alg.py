@@ -7,6 +7,10 @@ from collections import defaultdict
 from apex import amp
 from loguru import logger
 import warnings
+import itertools
+from sampler import ReplayBuffer
+from tqdm import tqdm
+
 warnings.filterwarnings('ignore', category=UserWarning)
 
 
@@ -20,6 +24,11 @@ class Algorithm(object):
         self.device = exp.device
         for k, v in vars(args).items():
             setattr(self, k, v)
+
+        self.replay_buffer = ReplayBuffer(self.replay_buffer_size)
+        self.env = None
+        self.env_steps = 0
+        self.episodes = 0
 
     def postprocess(self, sample):
 
@@ -71,6 +80,38 @@ class Algorithm(object):
 
         return name_dict
 
+    def play(self):
+        raise NotImplementedError
+
+    def actor_rb(self):
+
+        self.env_steps = 0
+        self.episodes = 0
+        tq = tqdm()
+
+        for i in itertools.count():
+
+            self.env.reset()
+            self.episodes = i + 1
+
+            while self.env:
+
+                state = self.play()
+                self.env_steps += 1
+                tq.update(1)
+
+                self.replay_buffer.add(state)
+
+                if not self.env_steps % self.steps_per_train and \
+                    (self.replay_buffer.size >= self.min_replay_buffer or \
+                     self.replay_buffer.size >= self.replay_buffer_size):
+
+                    for sample in self.replay_buffer.sample(self.consecutive_train, self.batch):
+                        yield sample
+
+            if self.env_steps >= self.total_steps:
+                break
+
     def train(self):
 
         if not self.networks_dict:
@@ -112,7 +153,7 @@ class Algorithm(object):
 
             self.net_0[name] = self.state_dict(net)
 
-    def save_checkpoint(self, path=None, aux=None):
+    def save_checkpoint(self, path=None, aux=None, save_model=False):
 
         if not self.networks_dict:
             self.get_networks()
@@ -127,7 +168,8 @@ class Algorithm(object):
 
         for net in self.networks_dict:
             state[net] = self.state_dict(self.networks_dict[net])
-            state[f"{net}_model"] = self.networks_dict[net]
+            if save_model:
+                state[f"{net}_model"] = self.networks_dict[net]
 
         for optimizer in self.optimizers_dict:
             state[optimizer] = copy.deepcopy(self.optimizers_dict[optimizer].state_dict())

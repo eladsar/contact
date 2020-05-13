@@ -7,6 +7,9 @@ from pg import PG
 from ddpg import DDPG
 from td3 import TD3
 from rbi import RBI
+from rbi2 import RBI2
+from sac1 import SAC1
+from sac2 import SAC2
 from tqdm import tqdm
 from collections import defaultdict
 from environment import BulletEnv
@@ -22,6 +25,12 @@ def get_algorithm(*argv, **kwargs):
         return TD3(*argv, **kwargs)
     if args.algorithm == 'rbi':
         return RBI(*argv, **kwargs)
+    if args.algorithm == 'rbi2':
+        return RBI2(*argv, **kwargs)
+    if args.algorithm == 'sac1':
+        return SAC1(*argv, **kwargs)
+    if args.algorithm == 'sac2':
+        return SAC2(*argv, **kwargs)
     raise NotImplementedError
 
 

@@ -52,3 +52,37 @@ class UniversalBatchSampler(object):
 
     def __len__(self):
         return self.length * self.minibatches
+
+
+class ReplayBuffer(object):
+    def __init__(self, max_size=int(1e6)):
+        self.max_size = max_size
+        self.ptr = 0
+        self.size = 0
+
+        self.states = {}
+
+    def add(self, state):
+
+        if not len(self.states):
+            for k, v in state.items():
+                self.states[k] = torch.repeat_interleave(torch.zeros_like(v), self.max_size, dim=0)
+
+        for k in self.states.keys():
+            self.states[k][self.ptr] = state[k]
+
+        self.ptr = (self.ptr + 1) % self.max_size
+        self.size = min(self.size + 1, self.max_size)
+
+    def sample(self, consecutive_train, batch_size, tail=None):
+
+        if tail is None:
+            indices = torch.randint(self.size, size=(consecutive_train, batch_size))
+        else:
+            tail = min(tail, self.size)
+            indices = torch.randint(tail, size=(consecutive_train, batch_size))
+            indices = (indices - self.ptr) % self.size
+
+        for ind in indices:
+            yield {k: v[ind] for k, v in self.states.items()}
+

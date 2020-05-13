@@ -385,7 +385,7 @@ class QVanilla(nn.Module):
         self.s_net = nn.Sequential(nn.Linear(states, hidden_1),
                                    nn.LayerNorm(hidden_1),
                                    nn.ReLU(),)
-
+        self.actions = actions
         self.head = nn.Sequential(nn.Linear(hidden_1 + actions, hidden_2),
                                   nn.LayerNorm(hidden_2),
                                   nn.ReLU(),
@@ -401,32 +401,45 @@ class QVanilla(nn.Module):
         nn.init.uniform_(self.head[-1].weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
         nn.init.uniform_(self.head[-1].bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
 
-    def forward(self, s, a):
-        s = self.s_net(s)
+    def forward(self, s, a=None):
+        x = self.s_net(s)
+        shape = x.shape
 
-        if len(a.shape) > len(s.shape):
-            n, b, _ = a.shape
-            s = s.unsqueeze(0)
-            s = s.expand(n, b, -1)
-            s = s.view(n * b, -1)
-            a = a.view(n * b, -1)
+        if self.actions:
+            if len(a.shape) > len(shape):
+                n, b, _ = shape = a.shape
 
-        x = self.head(torch.cat([s, a], dim=1))
+                x = x.unsqueeze(0).expand(n, b, -1)
 
-        if len(a.shape) > len(s.shape):
-            x = x.view(n, b, -1)
+                x = torch.cat([x, a], dim=-1)
+                x = x.view(n * b, -1)
+            else:
+                x = torch.cat([x, a], dim=-1)
 
-        return x.squeeze(1)
+        q = self.head(x)
+        q = q.view(*shape[:-1], -1).squeeze(-1)
+
+        # if torch.isnan(q).sum():
+        #     print("nan")
+
+        return q
+
+
+def tanh_grad(x):
+    x = torch.clamp_min(1 - torch.tanh(x) ** 2, min=1e-8)
+    return torch.log(x)
 
 
 def atanh(x):
+    x = torch.clamp(x, min=-1+1e-5, max=1-1e-5)
     return 0.5 * torch.log((1 + x) / (1 - x))
+
 
 class Deterministic(torch.distributions.distribution.Distribution):
 
-    def __init__(self, x):
+    def __init__(self, loc):
         super(Deterministic, self).__init__()
-        self.x = x
+        self.x = loc
 
     def rsample(self, sample_shape=torch.Size([])):
 
@@ -448,6 +461,10 @@ def identity(x):
     return x
 
 
+def zero(x):
+    return torch.zeros_like(x)
+
+
 class Policy(nn.Module):
 
     def __init__(self, distribution, bounded=True):
@@ -456,9 +473,12 @@ class Policy(nn.Module):
         if bounded:
             self.squash = torch.tanh
             self.desquash = atanh
+            self.da_du = tanh_grad
+
         else:
             self.squash = identity
             self.desquash = identity
+            self.da_du = zero
 
         if distribution == 'deterministic':
             self.generator = Deterministic
@@ -469,25 +489,28 @@ class Policy(nn.Module):
 
     def kl_divergence(self, args, dirction='forward'):
 
-        q = self.generator(args)
+        q = self.generator(*args)
         if dirction == 'forward':
             return torch.distributions.kl_divergence(self.distribution, q)
         else:
             return torch.distributions.kl_divergence(q, self.distribution)
 
-    def _sample(self, method, n=1):
+    def _sample(self, method, n=None):
 
-        if type(n) is int:
-            n = torch.Size([n])
+        if n is None:
+            sample = getattr(self.distribution, method)()
+        else:
+            if type(n) is int:
+                n = torch.Size([n])
 
-        sample = getattr(self.distribution, method)(n)
+            sample = getattr(self.distribution, method)(n)
         a = self.squash(sample)
         return a
 
-    def rsample(self, n=1):
+    def rsample(self, n=None):
         return self._sample('rsample', n=n)
 
-    def sample(self, n=1):
+    def sample(self, n=None):
         return self._sample('sample', n=n)
 
     def log_prob(self, a):
@@ -495,7 +518,11 @@ class Policy(nn.Module):
         distribution = self.distribution.expand(a.shape)
 
         sample = self.desquash(a)
-        return distribution.logprob(sample)
+
+        # log_prob = distribution.log_prob(sample) - self.da_du(sample).sum(dim=-1, keepdim=True)
+        log_prob = distribution.log_prob(sample) - self.da_du(sample)
+
+        return log_prob
 
     def entropy(self, a):
 
@@ -503,12 +530,14 @@ class Policy(nn.Module):
         sample = self.desquash(a)
         return distribution.entropy(sample)
 
-    def forward(self, *args):
+    def forward(self, **params):
 
-        self.distribution = self.generator(*args)
-        a = self.sample()
+        self.params = params
 
-        return a
+        self.distribution = self.generator(**params)
+        a = self.rsample()
+
+        return a.squeeze(0)
 
 
 class PiVanilla(Policy):
@@ -529,6 +558,8 @@ class PiVanilla(Policy):
 
         if distribution in ['Normal', 'Uniform']:
             self.std_head = nn.Linear(hidden_2, actions)
+            nn.init.uniform_(self.std_head.weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
+            nn.init.uniform_(self.std_head.bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
 
         fan_in_uniform_init(self.s_net[0].weight)
         fan_in_uniform_init(self.s_net[0].bias)
@@ -539,22 +570,20 @@ class PiVanilla(Policy):
         nn.init.uniform_(self.mu_head.weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
         nn.init.uniform_(self.mu_head.bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
 
-        nn.init.uniform_(self.std_head.weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
-        nn.init.uniform_(self.std_head.bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
-
     def forward(self, s):
         s = self.s_net(s)
 
         mu = self.mu_head(s)
 
         if self.form in ['Normal', 'Uniform']:
-            std = self.std_head(s)
-            std = std.exp()
-            args = mu, std
+            logstd = self.std_head(s)
+            logstd = torch.clamp(logstd, min=args.min_log, max=args.max_log)
+            std = logstd.exp()
+            params = {'loc': mu, 'scale': std}
         else:
-            args = mu,
+            params = {'loc': mu}
 
-        a = super(PiVanilla, self).forward(*args)
+        a = super(PiVanilla, self).forward(**params)
 
         return a
 
@@ -649,14 +678,80 @@ class Critic(nn.Module):
         return V.squeeze(1)
 
 
+class ActorTD3(Policy):
+    def __init__(self, state_dim, action_dim, distribution='deterministic', bounded=True):
+        super(ActorTD3, self).__init__(distribution, bounded=bounded)
+
+        self.l1 = nn.Linear(state_dim, 256)
+        self.l2 = nn.Linear(256, 256)
+        self.mu_head = nn.Linear(256, action_dim)
+
+        self.form = distribution
+
+        if distribution in ['Normal', 'Uniform']:
+            self.std_head = nn.Linear(256, action_dim)
+
+    def forward(self, s):
+        s = F.relu(self.l1(s))
+        s = F.relu(self.l2(s))
+        mu = self.mu_head(s)
+
+        if self.form in ['Normal', 'Uniform']:
+            logstd = self.std_head(s)
+            logstd = torch.clamp(logstd, min=args.min_log, max=args.max_log)
+            std = logstd.exp()
+            params = {'loc': mu, 'scale': std}
+        else:
+            params = {'loc': mu}
+
+        a = super(ActorTD3, self).forward(**params)
+        return a
+
+
+class CriticTD3(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(CriticTD3, self).__init__()
+
+        self.actions = action_dim
+        # Q1 architecture
+        self.l1 = nn.Linear(state_dim + action_dim, 256)
+        self.l2 = nn.Linear(256, 256)
+        self.l3 = nn.Linear(256, 1)
+
+    def forward(self, s, a):
+
+        shape = s.shape
+        if self.actions:
+            if len(a.shape) > len(shape):
+                n, b, _ = shape = a.shape
+
+                s = s.unsqueeze(0).expand(n, b, -1)
+
+                s = torch.cat([s, a], dim=-1)
+                s = s.view(n * b, -1)
+            else:
+                s = torch.cat([s, a], dim=-1)
+
+        s = F.relu(self.l1(s))
+        s = F.relu(self.l2(s))
+        q = self.l3(s)
+
+        q = q.view(*shape[:-1], -1).squeeze(-1)
+
+        return q
+
+
 # QNet = QSpline
 # PiNet = PiSpline
 
-QNet = QVanilla
-PiNet = PiVanilla
+# QNet = QVanilla
+# PiNet = PiVanilla
 
 # QNet = Critic
 # PiNet = Actor
+
+QNet = CriticTD3
+PiNet = ActorTD3
 
 #
 # class S2ANet(nn.Module):

@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 
+
 def soft_update(source, target, tau):
     for target_param, param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
@@ -66,8 +67,7 @@ class OrnsteinUhlenbeckActionNoise:
 
 
 class RandomNoise:
-    def __init__(self, mu, sigma, theta=.15, dt=1e-2, x0=None):
-        self.theta = theta
+    def __init__(self, mu, sigma):
         self.mu = mu
         self.sigma = sigma
         self.reset()

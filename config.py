@@ -56,48 +56,60 @@ parser.add_argument('--init', type=str, default='ortho', help='Initialization me
 parser.add_argument('--seed', type=int, default=0, help='Seed for reproducability')
 parser.add_argument('--board', type=int, default=1, help='Board Size [9|10|11]')
 
+parser.add_argument('--total-steps', type=int, default=int(1e6), metavar='STEPS', help='Total number of environment steps')
+parser.add_argument('--train-epoch', type=int, default=500, metavar='BATCHES', help='Length of each epoch (in batches)')
+parser.add_argument('--test-epoch', type=int, default=10, metavar='BATCHES', help='Length of test epoch (in batches)')
+
 # Netwoks parameters
 
-parser.add_argument('--lr-p', type=float, default=1e-4, metavar='α', help='learning rate for the policy network')
-parser.add_argument('--lr-q', type=float, default=1e-3, metavar='α', help='learning rate for the Q-function network')
+parser.add_argument('--batch', type=int, default=256, help='Batch Size')
+parser.add_argument('--lr-p', type=float, default=3e-4, metavar='α', help='learning rate for the policy network')
+parser.add_argument('--lr-q', type=float, default=3e-4, metavar='α', help='learning rate for the Q-function network')
 parser.add_argument('--weight-decay', type=float, default=0., help='L2 regularization coefficient')
 parser.add_argument('--dropout', type=float, default=0., help='Dropout regularization coefficient')
 parser.add_argument('--clip-p', type=float, default=0., help='Clip Pi Gradient L2 norm')
 parser.add_argument('--clip-q', type=float, default=0., help='Clip Pi Gradient L2 norm')
+parser.add_argument('--weight-decay-p', type=float, default=0, help='Weight decay coefficient for Q-net')
+parser.add_argument('--weight-decay-q', type=float, default=0, help='Weight decay coefficient for π-net')
+parser.add_argument('--min-log', type=int, default=-20, help='min log')
+parser.add_argument('--max-log', type=int, default=2, help='max log')
 
-# rbi parameters
-parser.add_argument('--rbi-samples', type=int, default=100, help='policy samples for rbi training')
-parser.add_argument('--cmin', type=float, default=0.5, metavar='c_min', help='Lower reroute threshold')
-parser.add_argument('--cmax', type=float, default=1.5, metavar='c_max', help='Upper reroute threshold')
-parser.add_argument('--rbi-epsilon', type=float, default=0.01, metavar='ε', help='Uniform sampling in RBI update')
-parser.add_argument('--rbi-greed', type=float, default=0.1, help='Greedy part in RBI update')
 
-parser.add_argument('--total-steps', type=int, default=int(1e6), metavar='STEPS', help='Total number of environment steps')
-parser.add_argument('--train-epoch', type=int, default=500, metavar='BATCHES', help='Length of each epoch (in batches)')
-parser.add_argument('--target-update', type=int, default=1000, metavar='BATCHES', help='update targets every number of steps')
-parser.add_argument('--test-epoch', type=int, default=10, metavar='BATCHES', help='Length of test epoch (in batches)')
-parser.add_argument('--batch', type=int, default=64, help='Batch Size')
-
-# parser.add_argument('--warmup-steps', type=int, default=2000, help='warm-up random steps')
-# parser.add_argument('--min-replay-buffer', type=int, default=1000, help='minimal replay buffer size')
-# parser.add_argument('--start-policy-update', type=int, default=200, help='minimal Q-learning steps before policy update')
-
-parser.add_argument('--warmup-steps', type=int, default=0, help='warm-up random steps')
-parser.add_argument('--min-replay-buffer', type=int, default=200, help='minimal replay buffer size')
+parser.add_argument('--warmup-steps', type=int, default=int(25e3), help='warm-up random steps')
+parser.add_argument('--min-replay-buffer', type=int, default=int(25e3), help='minimal replay buffer size')
 parser.add_argument('--start-policy-update', type=int, default=0, help='minimal Q-learning steps before policy update')
 
 
 # RL parameters
 
 parser.add_argument('--gamma', type=float, default=0.99, help='Discount Factor')
-parser.add_argument('--epsilon', type=float, default=0.2, metavar='ε', help='exploration parameter')
+parser.add_argument('--epsilon', type=float, default=0.1, metavar='ε', help='exploration parameter')
 parser.add_argument('--epsilon-warmup', type=float, default=0.2, metavar='ε', help='warm-up exploration parameter')
-parser.add_argument("--tau", default=0.001, help="Update factor for the soft update of the target networks")
+parser.add_argument("--tau", default=0.005, type=float, help="Update factor for the soft update of the target networks")
+parser.add_argument('--target-update', type=int, default=1000, metavar='BATCHES', help='update targets every number of steps')
+
 parser.add_argument('--steps-per-train', type=int, default=1, metavar='STEPS', help='number of steps between training epochs')
 parser.add_argument('--consecutive-train', type=int, default=1, metavar='STEPS', help='number of consecutive training iterations')
-parser.add_argument('--replay-memory-size', type=int, default=100000, help='Total replay memory size')
+parser.add_argument('--replay-buffer-size', type=int, default=int(1e6), help='Total replay memory size')
 parser.add_argument('--n-steps', type=int, default=1, metavar='STEPS', help='Number of steps for multi-step learning')
-parser.add_argument('--delayed-policy-update', type=int, default=1, metavar='STEPS', help='steps between policy updates')
+parser.add_argument('--delayed-policy-update', type=int, default=2, metavar='STEPS', help='steps between policy updates')
+
+# rbi parameters
+parser.add_argument('--rbi-samples', type=int, default=256, help='policy samples for rbi training')
+parser.add_argument('--cmin', type=float, default=0.5, metavar='c_min', help='Lower reroute threshold')
+parser.add_argument('--cmax', type=float, default=1.5, metavar='c_max', help='Upper reroute threshold')
+parser.add_argument('--rbi-epsilon', type=float, default=0.0, metavar='ε', help='Uniform sampling in RBI update')
+parser.add_argument('--kl-lambda', type=float, default=1., metavar='λ', help='parameter fot the kl non-parametrized constraint')
+parser.add_argument('--rbi-greed', type=float, default=0., help='Greedy part in RBI update')
+parser.add_argument('--alpha-rbi', type=float, default=0.1, help='max entropy vs. expected reward')
+
+# sac parameters
+parser.add_argument('--alpha', type=float, default=1, help='max entropy vs. expected reward')
+parser.add_argument('--entropy_tunning', type=bool, default=True)
+
+# td3 parameters
+parser.add_argument("--policy-noise", default=0.2)  # Noise added to target policy during critic update
+parser.add_argument("--noise-clip", default=0.5)  # Range to clip target policy noise
 
 args = parser.parse_args()
 seed = args.seed
@@ -296,6 +308,8 @@ class Experiment(object):
             if type(train_results['scalar'][param]) is not dict:
                 stat_line += '  %s %g \t|' % (param, train_results['scalar'][param])
         logger.info(stat_line)
+        path = os.path.join(self.results_dir, 'train')
+        np.save(f'{path}/{n:06d}.npy', {k: v for k, v in train_results.items()})
 
         if test_results is not None:
             stat_line = 'Eval: '
@@ -303,6 +317,9 @@ class Experiment(object):
                 if type(test_results['scalar'][param]) is not dict:
                     stat_line += '  %s %g \t|' % (param, test_results['scalar'][param])
             logger.info(stat_line)
+
+            path = os.path.join(self.results_dir, 'eval')
+            np.save(f'{path}/{n:06d}.npy', {k: v for k, v in test_results.items()})
 
     def log_alg(self, alg):
         pass

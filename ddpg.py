@@ -28,8 +28,8 @@ class DDPG(Algorithm):
         super(DDPG, self).__init__()
 
         self.env = env
-        n_a = env.env.action_space.shape[0]
-        n_s = env.env.observation_space.shape[0]
+        n_a = env.action_space.shape[0]
+        n_s = env.observation_space.shape[0]
 
         pi_net = PiNet(n_s, n_a)
         self.pi_net = pi_net.to(self.device)
@@ -66,78 +66,25 @@ class DDPG(Algorithm):
         self.optimizer_p = torch.optim.Adam(self.pi_net.parameters(), lr=self.lr_p, betas=(0.9, 0.999),
                                     weight_decay=0)
 
-        # self.noise = OrnsteinUhlenbeckActionNoise(torch.zeros(1, n_a).to(self.device), self.epsilon,
-        #                                           dt=(1 / self.env.env.metadata['video.frames_per_second']))
-
         self.noise = OrnsteinUhlenbeckActionNoise(torch.zeros(1, n_a).to(self.device),
                                                   self.epsilon * torch.ones(1, n_a).to(self.device))
-
-        # self.noise = RandomNoise(torch.zeros(1, n_a).to(self.device), self.epsilon)
-
-        self.env_steps = 0
-        self.episodes = 0
-        self.replay_buffer = defaultdict(list)
-
-    def sample(self):
-
-        for i, state in enumerate(self.play()):
-
-            self.env_steps = i + 1
-            if self.env_steps >= self.total_steps:
-                break
-
-            for k in state._fields:
-                v = getattr(state, k)
-                self.replay_buffer[k].append(v)
-
-            if not i % self.steps_per_train and i >= self.min_replay_buffer:
-
-                for k, v in self.replay_buffer.items():
-                    self.replay_buffer[k] = v[-self.replay_memory_size-self.n_steps:]
-
-                indices = torch.randint(len(self.replay_buffer['s']) - self.n_steps, size=(self.consecutive_train, self.batch))
-
-                for index in indices:
-                    index_0 = itemgetter(*index)
-                    # index_n = itemgetter(*(index + self.n_steps))
-
-                    sample = Sample(s=torch.cat(index_0(self.replay_buffer['s'])),
-                                    a=torch.cat(index_0(self.replay_buffer['a'])),
-                                    stag=torch.cat(index_0(self.replay_buffer['stag'])),
-                                    r=torch.cat(index_0(self.replay_buffer['r'])),
-                                    t=torch.cat(index_0(self.replay_buffer['t'])),)
-                    yield sample
+        self.sample = self.actor_rb
 
     def play(self):
 
-        self.env_steps = 0
-        self.noise.reset()
-        self.eval()
-
-        for i in itertools.count():
-
-            self.episodes = i + 1
-            self.env.reset()
+        if self.env.k == 0:
             self.noise.reset()
 
-            while self.env:
+        noise = self.noise()
+        with torch.no_grad():
 
-                noise = self.noise()
+            if self.env_steps >= self.warmup_steps:
+                a = self.pi_net(self.env.s) + noise
+            else:
+                a = noise
 
-                self.eval()
-                with torch.no_grad():
-
-                    if self.env_steps >= self.warmup_steps:
-                        a = self.pi_net(self.env.s) + noise
-                        # a = self.pi_net(self.env.s, noise=noise)
-                    else:
-                        a = noise
-
-                state = self.env(torch.clamp(a, min=-1, max=1))
-                # state = self.env(a)
-                yield state
-
-            # print(f'episode {self.episodes}\t| score {self.env.score}\t| length {self.env.k}')
+        state = self.env(torch.clamp(a, min=-1, max=1))
+        return state
 
     def train(self):
 
@@ -199,7 +146,7 @@ class DDPG(Algorithm):
                     for ki, vi in v.items():
                         results[k][ki] = vi
 
-                results['scalar']['rb'] = len(self.replay_buffer['s'])
+                results['scalar']['rb'] = self.replay_buffer.size
                 results['scalar']['env-steps'] = self.env_steps
                 results['scalar']['episodes'] = self.episodes
                 results['scalar']['train-steps'] = i
