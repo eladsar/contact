@@ -524,11 +524,9 @@ class Policy(nn.Module):
 
         return log_prob
 
-    def entropy(self, a):
+    def entropy(self):
 
-        distribution = self.distribution.expand(a.shape)
-        sample = self.desquash(a)
-        return distribution.entropy(sample)
+        return self.distribution.entropy()
 
     def forward(self, **params):
 

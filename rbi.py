@@ -27,30 +27,24 @@ def max_reroute(s, pi_net, q_net_1, q_net_2, n=100, cmin=0.5, cmax=1.5, greed=0.
     with torch.no_grad():
         beta = pi_net.sample(n)
 
-    _, b, na = beta.shape
-
-    s = s.unsqueeze(0).expand(n, *s.shape)
-    # s = s.view(n * b, *s.shape[2:])
-    s = s.reshape(n * b, *s.shape[2:])
-
-    a = beta.view(n * b, na)
+    # _, b, na = beta.shape
+    # s = s.unsqueeze(0).repeat_interleave(n, dim=0)
+    # a = beta.view(n * b, na)
 
     with torch.no_grad():
-        qa_1 = q_net_1(s, a)
-        qa_2 = q_net_2(s, a)
-        q = torch.min(qa_1, qa_2)
+        qa_1 = q_net_1(s, beta)
+        qa_2 = q_net_2(s, beta)
+        qa = torch.min(qa_1, qa_2).unsqueeze(-1)
 
-    q = q.view(n, b, 1)
-
-    rank = torch.argsort(q, dim=0, descending=True)
+    rank = torch.argsort(torch.argsort(qa, dim=0, descending=True), dim=0, descending=False)
     w = cmin * torch.ones_like(beta)
     m = int((1 - cmin) * n / (cmax - cmin))
 
-    w[rank[:m]] += (cmax - cmin)
-    w[m] += (1 - cmin) * n - m * (cmax - cmin)
+    w += (cmax - cmin) * (rank < m).float()
+    w += ((1 - cmin) * n - m * (cmax - cmin)) * (rank == m).float()
 
     w -= greed
-    w[rank[0]] += greed * n
+    w += greed * n * (rank == 0).float()
 
     w = w * (1 - epsilon) + epsilon
 
@@ -203,26 +197,27 @@ class RBI(Algorithm):
                 # a, (beta_org, w_org) = max_kl(self.env.s, self.pi_net, self.q_net_1, self.rbi_samples,
                 #                            self.kl_lambda)
 
-            # # online optimization
-            # beta = beta_org.permute(2, 0, 1)
-            # w = w_org.permute(2, 0, 1)
-            #
-            # self.pi_net(self.env.s)
-            # log_pi = self.pi_net.log_prob(beta)
-            #
-            # loss_p = (1 - self.alpha_rbi) * (- log_pi * w).mean(dim=1).sum()
-            #
-            # # kl div with N(μ, 1)
-            # mu = self.pi_net.params['loc']
-            # std_1 = torch.ones_like(mu)
-            #
+            # online optimization
+            beta = beta_org.permute(2, 0, 1)
+            w = w_org.permute(2, 0, 1)
+
+            self.pi_net(self.env.s)
+            log_pi = self.pi_net.log_prob(beta)
+
+            loss_p = (1 - self.alpha_rbi) * (- log_pi * w).mean(dim=1).sum()
+
+            # kl div with N(μ, 1)
+            mu = self.pi_net.params['loc']
+            std_1 = torch.ones_like(mu)
+
             # loss_p += self.alpha_rbi * self.pi_net.kl_divergence((mu, std_1), dirction='backward').sum(dim=-1).mean()
-            #
-            # self.optimizer_p.zero_grad()
-            # loss_p.backward()
-            # if self.clip_p:
-            #     nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
-            # self.optimizer_p.step()
+            loss_p -= self.alpha_rbi * self.pi_net.entropy().sum(dim=-1).mean()
+
+            self.optimizer_p.zero_grad()
+            loss_p.backward()
+            if self.clip_p:
+                nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
+            self.optimizer_p.step()
 
         else:
 
@@ -261,7 +256,6 @@ class RBI(Algorithm):
         # if self.clip_q:
         #     nn.utils.clip_grad_norm(self.q_net_2.parameters(), self.clip_q)
         # self.optimizer_q_2.step()
-
 
         state['beta'] = beta_org
         state['w'] = w_org
@@ -324,8 +318,8 @@ class RBI(Algorithm):
                 mu = self.pi_net.params['loc']
                 std_1 = torch.ones_like(mu)
 
-                loss_p += self.alpha_rbi * self.pi_net.kl_divergence((mu, std_1), dirction='backward').sum(dim=-1).mean()
-
+                # loss_p += self.alpha_rbi * self.pi_net.kl_divergence((mu, std_1), dirction='backward').sum(dim=-1).mean()
+                loss_p -= self.alpha_rbi * self.pi_net.entropy().sum(dim=-1).mean()
 
                 # self.pi_net(s)
                 # pi = self.pi_net.sample(self.rbi_samples)
