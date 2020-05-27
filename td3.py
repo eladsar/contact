@@ -1,23 +1,9 @@
-from model import MultipleOptimizer, QNet, PiNet
-from config import args, exp
+from model import QNet, PiNet
 import torch
 from torch import nn
 import torch.nn.functional as F
-from sampler import UniversalBatchSampler, HexDataset
 from alg import Algorithm
-import itertools
-import numpy as np
-import math
-from loguru import logger
-from collections import defaultdict
-from tqdm import tqdm
-import math
-import scipy.stats as sts
-import copy
-from apex import amp
-from operator import itemgetter
-from collections import namedtuple
-from utils import soft_update, OrnsteinUhlenbeckActionNoise, RandomNoise
+from utils import soft_update, RandomNoise
 
 
 class TD3(Algorithm):
@@ -54,32 +40,30 @@ class TD3(Algorithm):
 
         self.noise = RandomNoise(torch.zeros(1, self.na).to(self.device), self.epsilon)
 
-    def play(self, evaluate=False):
+    def play(self, env, evaluate=False):
+
+        if env.k == 0:
+            self.noise.reset()
 
         if evaluate:
             with torch.no_grad():
-                a = self.pi_net(self.env_train.s)
-            state = self.env_eval(a)
-            return state
+                a = self.pi_net(env.s)
 
-        if self.env_train.k == 0:
-            self.noise.reset()
-
-        if self.env_steps >= self.warmup_steps:
+        elif self.env_steps >= self.warmup_steps:
             with torch.no_grad():
-                a = self.pi_net(self.env_train.s) + self.noise()
+                a = self.pi_net(env.s) + self.noise()
             a = torch.clamp(a, min=-1, max=1)
         else:
             a = None
 
-        state = self.env_train(a)
+        state = env(a)
         return state
 
-    def offline_training(self, sample, train_results, n):
+    def replay_buffer_training(self, sample, train_results, n):
 
         s, a, r, t, stag = [sample[k] for k in ['s', 'a', 'r', 't', 'stag']]
 
-        self.train()
+        self.train_mode()
 
         with torch.no_grad():
             pi_tag = self.pi_target(stag)
@@ -124,7 +108,7 @@ class TD3(Algorithm):
                 nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
             self.optimizer_p.step()
 
-            train_results['scalar']['q_est'].append(float(-loss_p))
+            train_results['scalar']['objective'].append(float(-loss_p))
 
             soft_update(self.pi_net, self.pi_target, self.tau)
             soft_update(self.q_net_1, self.q_target_1, self.tau)

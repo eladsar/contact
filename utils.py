@@ -249,3 +249,10 @@ class Identity:
 
     def reset(self):
         pass
+
+
+def generalized_advantage_estimation(r, v, gamma, lambda_gae):
+
+    return (1 - lambda_gae)
+
+

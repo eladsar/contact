@@ -21,6 +21,7 @@ class Algorithm(object):
 
         self.env_train = kwargs['env_train']
         self.env_eval = kwargs['env_eval']
+
         self.na = self.env_train.action_space.shape[0]
         self.ns = self.env_train.observation_space.shape[0]
 
@@ -89,7 +90,7 @@ class Algorithm(object):
 
         return name_dict
 
-    def play(self, evaluate=False):
+    def play(self, env, evaluate=False):
         raise NotImplementedError
 
     def step(self):
@@ -104,11 +105,11 @@ class Algorithm(object):
 
             while self.env_train:
 
-                state = self.play()
+                state = self.play(self.env_train)
                 self.env_steps += 1
                 yield state
 
-    def offline_training(self, sample, train_results, n):
+    def replay_buffer_training(self, sample, train_results, n):
         return train_results
 
     def online_training(self, state, train_results):
@@ -117,7 +118,23 @@ class Algorithm(object):
     def episodic_training(self, state, train_results):
         return train_results
 
-    def train(self):
+    def train_mode(self):
+
+        if not self.networks_dict:
+            self.get_networks()
+
+        for net in self.networks_dict.values():
+            net.train()
+
+    def eval_mode(self):
+
+        if not self.networks_dict:
+            self.get_networks()
+
+        for net in self.networks_dict.values():
+            net.eval()
+
+    def reinforcement_training(self):
 
         self.replay_buffer.reset()
         train_results = defaultdict(lambda: defaultdict(list))
@@ -135,7 +152,7 @@ class Algorithm(object):
                 for j, sample in enumerate(self.replay_buffer.sample(self.consecutive_train, self.batch)):
 
                     n = i * self.consecutive_train + j
-                    train_results = self.offline_training(sample, train_results, n)
+                    train_results = self.replay_buffer_training(sample, train_results, n)
 
                 if not self.env_train:
                     train_results = self.episodic_training(state, train_results)
@@ -169,7 +186,7 @@ class Algorithm(object):
             self.env_eval.reset()
 
             while self.env_eval:
-                self.play(evaluate=True)
+                self.play(self.env_eval, evaluate=True)
 
             test_results['scalar']['score'].append(self.env_eval.score)
             test_results['scalar']['length'].append(self.env_eval.k)

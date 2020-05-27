@@ -70,9 +70,9 @@ class DDPG(Algorithm):
                                                   self.epsilon * torch.ones(1, n_a).to(self.device))
         self.sample = self.actor_rb
 
-    def play(self):
+    def play(self, env, evaluate=False):
 
-        if self.env.k == 0:
+        if env.k == 0:
             self.noise.reset()
 
         noise = self.noise()
@@ -83,7 +83,7 @@ class DDPG(Algorithm):
             else:
                 a = noise
 
-        state = self.env(torch.clamp(a, min=-1, max=1))
+        state = env(torch.clamp(a, min=-1, max=1))
         return state
 
     def train(self):
@@ -92,7 +92,7 @@ class DDPG(Algorithm):
 
         for i, (s, a, r, t, stag) in tqdm(enumerate(self.sample())):
             i += 1
-            self.train()
+            self.train_mode()
             self.optimizer_q.zero_grad()
             self.optimizer_p.zero_grad()
 

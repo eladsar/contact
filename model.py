@@ -373,58 +373,6 @@ def fan_in_uniform_init(tensor, fan_in=None):
     nn.init.uniform_(tensor, -w, w)
 
 
-WEIGHTS_FINAL_INIT = 3e-3
-BIAS_FINAL_INIT = 3e-4
-
-
-class QVanilla(nn.Module):
-
-    def __init__(self, states, actions, hidden_1=400, hidden_2=300):
-        super(QVanilla, self).__init__()
-
-        self.s_net = nn.Sequential(nn.Linear(states, hidden_1),
-                                   nn.LayerNorm(hidden_1),
-                                   nn.ReLU(),)
-        self.actions = actions
-        self.head = nn.Sequential(nn.Linear(hidden_1 + actions, hidden_2),
-                                  nn.LayerNorm(hidden_2),
-                                  nn.ReLU(),
-                                  nn.Linear(hidden_2, 1),
-                                  )
-
-        fan_in_uniform_init(self.s_net[0].weight)
-        fan_in_uniform_init(self.s_net[0].bias)
-
-        fan_in_uniform_init(self.head[0].weight)
-        fan_in_uniform_init(self.head[0].bias)
-
-        nn.init.uniform_(self.head[-1].weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
-        nn.init.uniform_(self.head[-1].bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
-
-    def forward(self, s, a=None):
-        x = self.s_net(s)
-        shape = x.shape
-
-        if self.actions:
-            if len(a.shape) > len(shape):
-                n, b, _ = shape = a.shape
-
-                x = x.unsqueeze(0).expand(n, b, -1)
-
-                x = torch.cat([x, a], dim=-1)
-                x = x.view(n * b, -1)
-            else:
-                x = torch.cat([x, a], dim=-1)
-
-        q = self.head(x)
-        q = q.view(*shape[:-1], -1).squeeze(-1)
-
-        # if torch.isnan(q).sum():
-        #     print("nan")
-
-        return q
-
-
 def tanh_grad(x):
     x = torch.clamp_min(1 - torch.tanh(x) ** 2, min=1e-8)
     return torch.log(x)
@@ -495,9 +443,9 @@ class Policy(nn.Module):
         else:
             return torch.distributions.kl_divergence(q, self.distribution)
 
-    def _sample(self, method, n=None, expected_value=False):
+    def _sample(self, method, n=None, evaluate=False):
 
-        if expected_value:
+        if evaluate:
             sample = self.distribution.mean
             if type(n) is int:
                 sample = torch.repeat_interleave(sample.unsqueeze(0), n, dim=0)
@@ -516,11 +464,11 @@ class Policy(nn.Module):
         a = self.squash(sample)
         return a
 
-    def rsample(self, n=None, expected_value=False):
-        return self._sample('rsample', n=n, expected_value=expected_value)
+    def rsample(self, n=None, evaluate=False):
+        return self._sample('rsample', n=n, evaluate=evaluate)
 
-    def sample(self, n=None, expected_value=False):
-        return self._sample('sample', n=n, expected_value=expected_value)
+    def sample(self, n=None, evaluate=False):
+        return self._sample('sample', n=n, evaluate=evaluate)
 
     def log_prob(self, a):
 
@@ -537,152 +485,14 @@ class Policy(nn.Module):
 
         return self.distribution.entropy()
 
-    def forward(self, **params):
+    def forward(self, evaluate=False, **params):
 
         self.params = params
 
         self.distribution = self.generator(**params)
-        a = self.rsample()
+        a = self.rsample(evaluate=evaluate)
 
         return a.squeeze(0)
-
-
-class PiVanilla(Policy):
-
-    def __init__(self, states, actions, hidden_1=400, hidden_2=300, distribution='deterministic', bounded=True):
-        super(PiVanilla, self).__init__(distribution, bounded=bounded)
-
-        self.form = distribution
-        self.s_net = nn.Sequential(nn.Linear(states, hidden_1),
-                                   nn.LayerNorm(hidden_1),
-                                   nn.ReLU(),
-                                   nn.Linear(hidden_1, hidden_2),
-                                   nn.LayerNorm(hidden_2),
-                                   nn.ReLU(),
-                                  )
-
-        self.mu_head = nn.Linear(hidden_2, actions)
-
-        if distribution in ['Normal', 'Uniform']:
-            self.std_head = nn.Linear(hidden_2, actions)
-            nn.init.uniform_(self.std_head.weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
-            nn.init.uniform_(self.std_head.bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
-
-        fan_in_uniform_init(self.s_net[0].weight)
-        fan_in_uniform_init(self.s_net[0].bias)
-
-        fan_in_uniform_init(self.s_net[3].weight)
-        fan_in_uniform_init(self.s_net[3].bias)
-
-        nn.init.uniform_(self.mu_head.weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
-        nn.init.uniform_(self.mu_head.bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
-
-    def forward(self, s):
-        s = self.s_net(s)
-
-        mu = self.mu_head(s)
-
-        if self.form in ['Normal', 'Uniform']:
-            logstd = self.std_head(s)
-            logstd = torch.clamp(logstd, min=args.min_log, max=args.max_log)
-            std = logstd.exp()
-            params = {'loc': mu, 'scale': std}
-        else:
-            params = {'loc': mu}
-
-        a = super(PiVanilla, self).forward(**params)
-
-        return a
-
-
-class Actor(nn.Module):
-    def __init__(self, num_inputs, action_space, hidden_size=(400, 300)):
-        super(Actor, self).__init__()
-        num_outputs = action_space
-
-        # Layer 1
-        self.linear1 = nn.Linear(num_inputs, hidden_size[0])
-        self.ln1 = nn.LayerNorm(hidden_size[0])
-
-        # Layer 2
-        self.linear2 = nn.Linear(hidden_size[0], hidden_size[1])
-        self.ln2 = nn.LayerNorm(hidden_size[1])
-
-        # Output Layer
-        self.mu = nn.Linear(hidden_size[1], num_outputs)
-
-        # Weight Init
-        fan_in_uniform_init(self.linear1.weight)
-        fan_in_uniform_init(self.linear1.bias)
-
-        fan_in_uniform_init(self.linear2.weight)
-        fan_in_uniform_init(self.linear2.bias)
-
-        nn.init.uniform_(self.mu.weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
-        nn.init.uniform_(self.mu.bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
-
-    def forward(self, inputs):
-        x = inputs
-
-        # Layer 1
-        x = self.linear1(x)
-        x = self.ln1(x)
-        x = F.relu(x)
-
-        # Layer 2
-        x = self.linear2(x)
-        x = self.ln2(x)
-        x = F.relu(x)
-
-        # Output
-        mu = torch.tanh(self.mu(x))
-        return mu
-
-
-class Critic(nn.Module):
-    def __init__(self, num_inputs, action_space, hidden_size=(400, 300)):
-        super(Critic, self).__init__()
-        num_outputs = action_space
-
-        # Layer 1
-        self.linear1 = nn.Linear(num_inputs, hidden_size[0])
-        self.ln1 = nn.LayerNorm(hidden_size[0])
-
-        # Layer 2
-        # In the second layer the actions will be inserted also
-        self.linear2 = nn.Linear(hidden_size[0] + num_outputs, hidden_size[1])
-        self.ln2 = nn.LayerNorm(hidden_size[1])
-
-        # Output layer (single value)
-        self.V = nn.Linear(hidden_size[1], 1)
-
-        # Weight Init
-        fan_in_uniform_init(self.linear1.weight)
-        fan_in_uniform_init(self.linear1.bias)
-
-        fan_in_uniform_init(self.linear2.weight)
-        fan_in_uniform_init(self.linear2.bias)
-
-        nn.init.uniform_(self.V.weight, -WEIGHTS_FINAL_INIT, WEIGHTS_FINAL_INIT)
-        nn.init.uniform_(self.V.bias, -BIAS_FINAL_INIT, BIAS_FINAL_INIT)
-
-    def forward(self, inputs, actions):
-        x = inputs
-
-        # Layer 1
-        x = self.linear1(x)
-        x = self.ln1(x)
-        x = F.relu(x)
-
-        # Layer 2
-        x = torch.cat((x, actions), 1)  # Insert the actions
-        x = self.linear2(x)
-        x = self.ln2(x)
-        x = F.relu(x)
-
-        # Output
-        V = self.V(x)
-        return V.squeeze(1)
 
 
 class MedianNorm(nn.Module):
@@ -724,10 +534,7 @@ class ActorTD3(Policy):
         if distribution in ['Normal', 'Uniform']:
             self.std_head = nn.Linear(256, action_dim)
 
-    def forward(self, s):
-
-        # s = F.relu(self.l1(s))
-        # s = F.relu(self.l2(s))
+    def forward(self, s, evaluate=False):
 
         s = self.lin(s)
 
@@ -741,84 +548,83 @@ class ActorTD3(Policy):
         else:
             params = {'loc': mu}
 
-        a = super(ActorTD3, self).forward(**params)
+        a = super(ActorTD3, self).forward(**params, evaluate=evaluate)
         return a
 
 
-class ActorMoG(Policy):
-    def __init__(self, state_dim, action_dim, mixtures, bounded=True):
-        super(ActorMoG, self).__init__('Normal', bounded=bounded)
-
-        self.l1 = nn.Linear(state_dim, 256)
-        self.l2 = nn.Linear(256, 256)
-
-        self.mu_head = nn.Linear(256, action_dim * mixtures)
-        self.attention = nn.Linear(256, action_dim * mixtures)
-        self.std_head = nn.Linear(256, action_dim * mixtures)
-
-        self.na = action_dim
-        self.nm = mixtures
-        self.w = None
-
-    def entropy(self):
-
-        return self.distribution.entropy()
-
-    def _sample(self, method, n=None, expected_value=False):
-
-        prob = torch.distributions.Categorical(probs=self.w)
-
-        if expected_value:
-            sample = self.distribution.mean
-            if type(n) is int:
-                sample = torch.repeat_interleave(sample.unsqueeze(0), n, dim=0)
-
-            if method == 'sample':
-                sample = sample.detach()
-
-        elif n is None:
-            sample = getattr(self.distribution, method)()
-            prob = prob.sample()
-        else:
-
-            if type(n) is int:
-                n = torch.Size([n])
-            sample = getattr(self.distribution, method)(n)
-            prob = prob.sample(n)
-
-        a = self.squash(sample)
-
-        a = a.gather(a, 2, prob.unsqueeze(2)).squeeze(2)
-
-        return a
-
-    def log_prob(self, a):
-
-        distribution = self.distribution.expand(a.shape)
-        w = self.w.expand(a.shape)
-        sample = self.desquash(a)
-
-        # log_prob = distribution.log_prob(sample) - self.da_du(sample).sum(dim=-1, keepdim=True)
-        log_prob = distribution.log_prob(sample) - self.da_du(sample) + torch.log(w)
-
-        return log_prob
-
-    def forward(self, s):
-        s = F.relu(self.l1(s))
-        s = F.relu(self.l2(s))
-        mu = self.mu_head(s)
-        mu = mu.view(len(mu), self.na, self.nm)
-        w = self.attention(s)
-        self.w = torch.softmax(w, dim=-1)
-
-        logstd = self.std_head(s)
-        logstd = torch.clamp(logstd, min=args.min_log, max=args.max_log)
-        std = logstd.exp()
-        params = {'loc': mu, 'scale': std}
-
-        a = super(ActorMoG, self).forward(**params)
-        return a
-
+# class ActorMoG(Policy):
+#     def __init__(self, state_dim, action_dim, mixtures, bounded=True):
+#         super(ActorMoG, self).__init__('Normal', bounded=bounded)
+#
+#         self.l1 = nn.Linear(state_dim, 256)
+#         self.l2 = nn.Linear(256, 256)
+#
+#         self.mu_head = nn.Linear(256, action_dim * mixtures)
+#         self.attention = nn.Linear(256, action_dim * mixtures)
+#         self.std_head = nn.Linear(256, action_dim * mixtures)
+#
+#         self.na = action_dim
+#         self.nm = mixtures
+#         self.w = None
+#
+#     def entropy(self):
+#
+#         return self.distribution.entropy()
+#
+#     def _sample(self, method, n=None, evaluate=False):
+#
+#         prob = torch.distributions.Categorical(probs=self.w)
+#
+#         if evaluate:
+#             sample = self.distribution.mean
+#             if type(n) is int:
+#                 sample = torch.repeat_interleave(sample.unsqueeze(0), n, dim=0)
+#
+#             if method == 'sample':
+#                 sample = sample.detach()
+#
+#         elif n is None:
+#             sample = getattr(self.distribution, method)()
+#             prob = prob.sample()
+#         else:
+#
+#             if type(n) is int:
+#                 n = torch.Size([n])
+#             sample = getattr(self.distribution, method)(n)
+#             prob = prob.sample(n)
+#
+#         a = self.squash(sample)
+#
+#         a = a.gather(a, 2, prob.unsqueeze(2)).squeeze(2)
+#
+#         return a
+#
+#     def log_prob(self, a):
+#
+#         distribution = self.distribution.expand(a.shape)
+#         w = self.w.expand(a.shape)
+#         sample = self.desquash(a)
+#
+#         # log_prob = distribution.log_prob(sample) - self.da_du(sample).sum(dim=-1, keepdim=True)
+#         log_prob = distribution.log_prob(sample) - self.da_du(sample) + torch.log(w)
+#
+#         return log_prob
+#
+#     def forward(self, s):
+#         s = F.relu(self.l1(s))
+#         s = F.relu(self.l2(s))
+#         mu = self.mu_head(s)
+#         mu = mu.view(len(mu), self.na, self.nm)
+#         w = self.attention(s)
+#         self.w = torch.softmax(w, dim=-1)
+#
+#         logstd = self.std_head(s)
+#         logstd = torch.clamp(logstd, min=args.min_log, max=args.max_log)
+#         std = logstd.exp()
+#         params = {'loc': mu, 'scale': std}
+#
+#         a = super(ActorMoG, self).forward(**params)
+#         return a
 
 
 class CriticTD3(nn.Module):

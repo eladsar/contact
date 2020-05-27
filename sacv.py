@@ -20,10 +20,10 @@ from collections import namedtuple
 from utils import soft_update, OrnsteinUhlenbeckActionNoise, RandomNoise
 
 
-class SAC1(Algorithm):
+class SACV(Algorithm):
 
     def __init__(self, env):
-        super(SAC1, self).__init__()
+        super(SACV, self).__init__()
 
         self.env = env
         n_a = env.action_space.shape[0]
@@ -80,7 +80,7 @@ class SAC1(Algorithm):
 
             s, a, r, t, stag, beta, w = [sample[k] for k in ['s', 'a', 'r', 't', 'stag']]
 
-            self.train()
+            self.train_mode()
 
             with torch.no_grad():
                 v_target = self.v_target(stag)

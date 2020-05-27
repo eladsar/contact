@@ -47,7 +47,7 @@ boolean_feature("reload", False, "Load saved model")
 boolean_feature("half", True, 'Use half precision calculation')
 boolean_feature("supervised", False, 'Supervised Learning')
 boolean_feature("reinforcement", False, 'Reinforcement Learning')
-boolean_feature("lognet", False, 'Log  networks parameters')
+boolean_feature("lognet", True, 'Log  networks parameters')
 boolean_feature("render", False, 'Render environment image')
 
 # experiment parameters
@@ -140,6 +140,13 @@ def set_seed(seed=seed):
         np.random.seed(seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+
+
+def set_env_seed(env, seed=seed):
+
+    if seed > 0:
+        env.seed(seed)
+        env.action_space(seed)
 
 
 class Experiment(object):
