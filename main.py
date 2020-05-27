@@ -10,6 +10,7 @@ from rbi import RBI
 from rbi2 import RBI2
 from sac1 import SAC1
 from sac2 import SAC2
+from sspg import SSPG
 from tqdm import tqdm
 from collections import defaultdict
 from environment import BulletEnv
@@ -31,6 +32,8 @@ def get_algorithm(*argv, **kwargs):
         return SAC1(*argv, **kwargs)
     if args.algorithm == 'sac2':
         return SAC2(*argv, **kwargs)
+    if args.algorithm == 'sspg':
+        return SSPG(*argv, **kwargs)
     raise NotImplementedError
 
 
@@ -64,11 +67,10 @@ def reinforcement(alg):
     aux = reload(alg)
     n_offset = aux['n']
 
-    # test_results = next(evaluation)
-    for epoch, train_results in enumerate(alg.train()):
+    for epoch, (train_results, test_results) in enumerate(alg.train()):
         n = n_offset + alg.env_steps + 1
 
-        exp.log_data(train_results, None, n, alg=alg if args.lognet else None)
+        exp.log_data(train_results, test_results, n, alg=alg if args.lognet else None)
 
         aux = {'n': n}
         alg.save_checkpoint(exp.checkpoint, aux)
@@ -76,8 +78,11 @@ def reinforcement(alg):
 
 def main():
 
-    env = BulletEnv(args.environment, n_steps=args.n_steps, gamma=args.gamma)
-    alg = get_algorithm(env)
+    envs = {k: BulletEnv(args.environment, n_steps=args.n_steps, gamma=args.gamma,
+                         norm_rewards=args.norm_rewards, norm_states=args.norm_states,
+                         clip_obs=args.clip_obs, clip_rew=args.clip_rew) for k in ['env_train', 'env_eval']}
+
+    alg = get_algorithm(**envs)
 
     exp.log_alg(alg)
 

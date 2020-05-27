@@ -18,7 +18,6 @@ from apex import amp
 from operator import itemgetter
 from collections import namedtuple
 from utils import soft_update, OrnsteinUhlenbeckActionNoise, RandomNoise
-import torch.autograd as autograd
 
 
 def max_reroute(s, pi_net, q_net_1, q_net_2, n=100, cmin=0.5, cmax=1.5, greed=0.1, epsilon=0.01):
@@ -27,6 +26,10 @@ def max_reroute(s, pi_net, q_net_1, q_net_2, n=100, cmin=0.5, cmax=1.5, greed=0.
 
     with torch.no_grad():
         beta = pi_net.sample(n)
+
+    # _, b, na = beta.shape
+    # s = s.unsqueeze(0).repeat_interleave(n, dim=0)
+    # a = beta.view(n * b, na)
 
     with torch.no_grad():
         qa_1 = q_net_1(s, beta)
@@ -124,56 +127,100 @@ class RBI(Algorithm):
         self.optimizer_p = torch.optim.Adam(self.pi_net.parameters(), lr=self.lr_p, betas=(0.9, 0.999),
                                     weight_decay=self.weight_decay_p)
 
-    def online_training(self, state, train_results):
+        self.sample = self.actor_rb
 
-        # s, beta, w = [state[k] for k in ['s', 'beta', 'w']]
-        #
-        # # online optimization
-        # beta = beta.permute(2, 0, 1)
-        # w = w.permute(2, 0, 1)
-        #
-        # self.pi_net(s)
-        # log_pi = self.pi_net.log_prob(beta)
-        #
-        # loss_p = (1 - self.alpha_rbi) * (- log_pi * w).mean(dim=1).sum()
-        # loss_p -= self.alpha_rbi * self.pi_net.entropy().sum(dim=-1).mean()
-        #
-        # self.optimizer_p.zero_grad()
-        # loss_p.backward()
-        # if self.clip_p:
-        #     nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
-        # self.optimizer_p.step()
+    def actor_rb(self):
 
-        state.pop('beta')
-        state.pop('w')
+        self.env_steps = 0
+        self.episodes = 0
+        tq = tqdm()
 
-        return state, train_results
+        for i in itertools.count():
 
-    def play(self, evaluate=False):
+            self.env.reset()
+            self.episodes = i + 1
 
-        if evaluate:
+            while self.env:
 
-            self.pi_net(self.env_eval.s)
-            a = self.pi_net.sample(expected_value=True)
-            state = self.env_eval(a)
-            return state
+                state = self.play()
+                self.env_steps += 1
+                tq.update(1)
+
+                self.replay_buffer.add(state)
+
+                if not self.env_steps % self.steps_per_train and \
+                    (self.replay_buffer.size >= self.min_replay_buffer or \
+                     self.replay_buffer.size >= self.replay_buffer_size):
+
+                    for sample in self.replay_buffer.sample(self.consecutive_train, self.batch):
+                        yield sample
+
+            # tail = self.env.k
+            # for sample in self.replay_buffer.sample(1 * int(tail / self.batch), self.batch, tail=tail):
+            #     s, beta, w = [sample[k] for k in ['s', 'beta', 'w']]
+            #
+            #     beta = beta.permute(2, 0, 1)
+            #     w = w.permute(2, 0, 1)
+            #
+            #     self.pi_net(self.env.s)
+            #     log_pi = self.pi_net.log_prob(beta)
+            #
+            #     loss_p = (1 - self.alpha_rbi) * (- log_pi * w).sum(dim=1).mean()
+            #
+            #     # kl div with N(μ, 1)
+            #     mu = self.pi_net.params['loc']
+            #     std_1 = torch.ones_like(mu)
+            #
+            #     loss_p += self.alpha_rbi * self.pi_net.kl_divergence((mu, std_1), dirction='backward').mean(dim=1).sum()
+            #
+            #     self.optimizer_p.zero_grad()
+            #     loss_p.backward()
+            #     if self.clip_p:
+            #         nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
+            #     self.optimizer_p.step()
+
+            if self.env_steps >= self.total_steps:
+                break
+
+    def play(self):
 
         if self.env_steps >= self.warmup_steps:
-            a, (beta, w) = max_reroute(self.env_train.s, self.pi_net, self.q_net_1, self.q_net_2, self.rbi_samples,
-                                       self.cmin, self.cmax, self.rbi_greed, self.rbi_epsilon)
+            with torch.no_grad():
+                a, (beta_org, w_org) = max_reroute(self.env.s, self.pi_net, self.q_net_1, self.q_net_2, self.rbi_samples,
+                                           self.cmin, self.cmax, self.rbi_greed, self.rbi_epsilon)
 
-            # a, (beta, w) = max_kl(self.env_train.s, self.pi_net, self.q_net_1, self.rbi_samples,
-            #                            self.kl_lambda)
+                # a, (beta_org, w_org) = max_kl(self.env.s, self.pi_net, self.q_net_1, self.rbi_samples,
+                #                            self.kl_lambda)
+
+            # # online optimization
+            # beta = beta_org.permute(2, 0, 1)
+            # w = w_org.permute(2, 0, 1)
+            #
+            # self.pi_net(self.env.s)
+            # log_pi = self.pi_net.log_prob(beta)
+            #
+            # loss_p = (1 - self.alpha_rbi) * (- log_pi * w).mean(dim=1).sum()
+            #
+            # # kl div with N(μ, 1)
+            # mu = self.pi_net.params['loc']
+            # std_1 = torch.ones_like(mu)
+            #
+            # # loss_p += self.alpha_rbi * self.pi_net.kl_divergence((mu, std_1), dirction='backward').sum(dim=-1).mean()
+            # loss_p -= self.alpha_rbi * self.pi_net.entropy().sum(dim=-1).mean()
+            #
+            # self.optimizer_p.zero_grad()
+            # loss_p.backward()
+            # if self.clip_p:
+            #     nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
+            # self.optimizer_p.step()
 
         else:
 
-            beta = torch.cuda.FloatTensor(1, self.na, self.rbi_samples).normal_()
-            w = torch.ones_like(beta)
+            beta_org = torch.cuda.FloatTensor(1, self.na, self.rbi_samples).normal_()
+            w_org = torch.ones_like(beta_org)
             a = torch.cuda.FloatTensor(1, self.na).normal_()
 
-        state = self.env_train(a)
-        state['beta'] = beta
-        state['w'] = w
+        state = self.env(a)
 
         return state
 
@@ -211,7 +258,7 @@ class RBI(Algorithm):
             nn.utils.clip_grad_norm(self.q_net_2.parameters(), self.clip_q)
         self.optimizer_q_2.step()
 
-        if not n % self.rbi_delayed_policy_update:
+        if not n % self.delayed_policy_update:
 
             _, (beta, w) = max_reroute(s, self.pi_net, self.q_net_1, self.q_net_2, self.rbi_samples,
                                        self.cmin, self.cmax, self.rbi_greed, self.rbi_epsilon)
@@ -233,6 +280,8 @@ class RBI(Algorithm):
             self.optimizer_p.step()
 
             train_results['scalar']['q_est'].append(float(-loss_p))
+
+            # soft_update(self.pi_net, self.pi_target, self.tau)
 
         train_results['scalar']['loss_q'].append(float(loss_q))
 
