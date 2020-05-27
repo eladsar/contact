@@ -58,7 +58,7 @@ parser.add_argument('--board', type=int, default=1, help='Board Size [9|10|11]')
 
 parser.add_argument('--total-steps', type=int, default=int(1e6), metavar='STEPS', help='Total number of environment steps')
 parser.add_argument('--train-epoch', type=int, default=500, metavar='BATCHES', help='Length of each epoch (in batches)')
-parser.add_argument('--test-epoch', type=int, default=10, metavar='BATCHES', help='Length of test epoch (in batches)')
+parser.add_argument('--test-episodes', type=int, default=10, metavar='BATCHES', help='Length of test epoch (in batches)')
 
 # Netwoks parameters
 

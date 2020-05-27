@@ -16,7 +16,13 @@ warnings.filterwarnings('ignore', category=UserWarning)
 
 class Algorithm(object):
 
-    def __init__(self):
+    def __init__(self, *largs, **kwargs):
+
+        self.env_train = kwargs['env_train']
+        self.env_eval = kwargs['env_test']
+        self.na = self.env.action_space.shape[0]
+        self.ns = self.env.observation_space.shape[0]
+
         self.networks_dict = {}
         self.optimizers_dict = {}
 
@@ -26,7 +32,6 @@ class Algorithm(object):
             setattr(self, k, v)
 
         self.replay_buffer = ReplayBuffer(self.replay_buffer_size)
-        self.env = None
         self.env_steps = 0
         self.episodes = 0
 
@@ -80,53 +85,89 @@ class Algorithm(object):
 
         return name_dict
 
-    def play(self):
+    def play(self, test=False):
         raise NotImplementedError
 
-    def actor_rb(self):
+    def step(self):
 
         self.env_steps = 0
         self.episodes = 0
-        tq = tqdm()
 
         for i in itertools.count():
 
-            self.env.reset()
+            self.env_train.reset()
             self.episodes = i + 1
 
-            while self.env:
+            while self.env_train:
 
                 state = self.play()
                 self.env_steps += 1
-                tq.update(1)
+                yield state
 
-                self.replay_buffer.add(state)
+                if self.env_steps >= self.total_steps:
+                    break
 
-                if not self.env_steps % self.steps_per_train and \
-                    (self.replay_buffer.size >= self.min_replay_buffer or \
-                     self.replay_buffer.size >= self.replay_buffer_size):
+    def offline_training(self, sample, train_results, n):
+        return train_results
 
-                    for sample in self.replay_buffer.sample(self.consecutive_train, self.batch):
-                        yield sample
+    def online_training(self, state, train_results):
+        return state, train_results
 
-            if self.env_steps >= self.total_steps:
-                break
+    def episodic_training(self, state, train_results):
+        return state, train_results
 
     def train(self):
 
-        if not self.networks_dict:
-            self.get_networks()
+        self.replay_buffer.reset()
+        train_results = defaultdict(lambda: defaultdict(list))
+        test_results = defaultdict(lambda: defaultdict(list))
 
-        for net in self.networks_dict.values():
-            net.train()
+        for i, state in tqdm(self.step()):
+            i += 1
 
-    def eval(self):
+            state, train_results = self.online_training(state, train_results)
+            self.replay_buffer.add(state)
 
-        if not self.networks_dict:
-            self.get_networks()
+            if not self.env_steps % self.steps_per_train and (self.replay_buffer.size >= self.min_replay_buffer or
+               self.replay_buffer.size >= self.replay_buffer_size):
 
-        for net in self.networks_dict.values():
-            net.eval()
+                for sample in self.replay_buffer.sample(self.consecutive_train, self.batch):
+                    train_results = self.offline_training(sample, train_results, i)
+
+                if not self.env_train:
+                    train_results = self.episodic_training(state, train_results)
+
+            if not i % self.train_epoch:
+
+                test_results = self.eval(test_results)
+
+                statistics = self.env_train.get_stats()
+                for k, v in statistics.items():
+                    for ki, vi in v.items():
+                        train_results[k][ki] = vi
+
+                train_results['scalar']['rb'] = self.replay_buffer.size
+                train_results['scalar']['env-steps'] = self.env_steps
+                train_results['scalar']['episodes'] = self.episodes
+                train_results['scalar']['train-steps'] = i
+                test_results['scalar']['train-steps'] = i
+
+                yield train_results, test_results
+                train_results = defaultdict(lambda: defaultdict(list))
+                test_results = defaultdict(lambda: defaultdict(list))
+
+    def eval(self, test_results):
+
+        for i in range(self.test_episodes):
+
+            self.env_eval.reset()
+
+            while self.env_eval:
+                self.play(test=True)
+
+            test_results['scalar']['score'].append(self.env_eval.score)
+
+        return test_results
 
     def state_dict(self, net):
 

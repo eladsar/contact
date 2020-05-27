@@ -59,7 +59,11 @@ class ReplayBuffer(object):
         self.max_size = max_size
         self.ptr = 0
         self.size = 0
+        self.states = {}
 
+    def reset(self):
+        self.ptr = 0
+        self.size = 0
         self.states = {}
 
     def add(self, state):

@@ -94,32 +94,27 @@ def max_kl(s, pi_net, q_net, n=100, lambda_kl=1.):
 
 class RBI(Algorithm):
 
-    def __init__(self, env):
-        super(RBI, self).__init__()
+    def __init__(self, *largs, **kwargs):
+        super(RBI, self).__init__(*largs, **kwargs)
 
-        self.env = env
-        na = env.action_space.shape[0]
-        ns = env.observation_space.shape[0]
-        self.na = na
-
-        pi_net = PiNet(ns, na, distribution='Normal')
+        pi_net = PiNet(self.ns, self.na, distribution='Normal')
         self.pi_net = pi_net.to(self.device)
 
-        pi_target = PiNet(ns, na, distribution='Normal')
+        pi_target = PiNet(self.ns, self.na, distribution='Normal')
         self.pi_target = pi_target.to(self.device)
         self.load_state_dict(self.pi_target, self.pi_net.state_dict())
 
-        q_net_1 = QNet(ns, na)
+        q_net_1 = QNet(self.ns, self.na)
         self.q_net_1 = q_net_1.to(self.device)
 
-        q_target_1 = QNet(ns, na)
+        q_target_1 = QNet(self.ns, self.na)
         self.q_target_1 = q_target_1.to(self.device)
         self.load_state_dict(self.q_target_1, self.q_net_1.state_dict())
 
-        q_net_2 = QNet(ns, na)
+        q_net_2 = QNet(self.ns, self.na)
         self.q_net_2 = q_net_2.to(self.device)
 
-        q_target_2 = QNet(ns, na)
+        q_target_2 = QNet(self.ns, self.na)
         self.q_target_2 = q_target_2.to(self.device)
         self.load_state_dict(self.q_target_2, self.q_net_2.state_dict())
 
@@ -197,27 +192,27 @@ class RBI(Algorithm):
                 # a, (beta_org, w_org) = max_kl(self.env.s, self.pi_net, self.q_net_1, self.rbi_samples,
                 #                            self.kl_lambda)
 
-            # online optimization
-            beta = beta_org.permute(2, 0, 1)
-            w = w_org.permute(2, 0, 1)
-
-            self.pi_net(self.env.s)
-            log_pi = self.pi_net.log_prob(beta)
-
-            loss_p = (1 - self.alpha_rbi) * (- log_pi * w).mean(dim=1).sum()
-
-            # kl div with N(μ, 1)
-            mu = self.pi_net.params['loc']
-            std_1 = torch.ones_like(mu)
-
-            # loss_p += self.alpha_rbi * self.pi_net.kl_divergence((mu, std_1), dirction='backward').sum(dim=-1).mean()
-            loss_p -= self.alpha_rbi * self.pi_net.entropy().sum(dim=-1).mean()
-
-            self.optimizer_p.zero_grad()
-            loss_p.backward()
-            if self.clip_p:
-                nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
-            self.optimizer_p.step()
+            # # online optimization
+            # beta = beta_org.permute(2, 0, 1)
+            # w = w_org.permute(2, 0, 1)
+            #
+            # self.pi_net(self.env.s)
+            # log_pi = self.pi_net.log_prob(beta)
+            #
+            # loss_p = (1 - self.alpha_rbi) * (- log_pi * w).mean(dim=1).sum()
+            #
+            # # kl div with N(μ, 1)
+            # mu = self.pi_net.params['loc']
+            # std_1 = torch.ones_like(mu)
+            #
+            # # loss_p += self.alpha_rbi * self.pi_net.kl_divergence((mu, std_1), dirction='backward').sum(dim=-1).mean()
+            # loss_p -= self.alpha_rbi * self.pi_net.entropy().sum(dim=-1).mean()
+            #
+            # self.optimizer_p.zero_grad()
+            # loss_p.backward()
+            # if self.clip_p:
+            #     nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
+            # self.optimizer_p.step()
 
         else:
 
@@ -227,140 +222,71 @@ class RBI(Algorithm):
 
         state = self.env(a)
 
-        # s, a, r, t, stag = [state[k] for k in ['s', 'a', 'r', 't', 'stag']]
-        #
-        # with torch.no_grad():
-        #     self.pi_net(stag)
-        #     pi_tag_1 = self.pi_net.sample(self.rbi_samples)
-        #     pi_tag_2 = self.pi_net.sample(self.rbi_samples)
-        #     q_target_1 = self.q_target_1(stag, pi_tag_1).mean(dim=0)
-        #     q_target_2 = self.q_target_2(stag, pi_tag_2).mean(dim=0)
-        #
-        # q_target = torch.min(q_target_1, q_target_2)
-        # g = r + (1 - t) * self.gamma ** self.n_steps * q_target
-        #
-        # qa = self.q_net_1(s, a)
-        # loss_q = F.mse_loss(qa, g, reduction='mean')
-        #
-        # self.optimizer_q_1.zero_grad()
-        # loss_q.backward()
-        # if self.clip_q:
-        #     nn.utils.clip_grad_norm(self.q_net_1.parameters(), self.clip_q)
-        # self.optimizer_q_1.step()
-        #
-        # qa = self.q_net_2(s, a)
-        # loss_q = F.mse_loss(qa, g, reduction='mean')
-        #
-        # self.optimizer_q_2.zero_grad()
-        # loss_q.backward()
-        # if self.clip_q:
-        #     nn.utils.clip_grad_norm(self.q_net_2.parameters(), self.clip_q)
-        # self.optimizer_q_2.step()
-
-        state['beta'] = beta_org
-        state['w'] = w_org
-
         return state
 
-    def train(self):
+    def offline_training(self, sample, train_results, n):
 
-        results = defaultdict(lambda: defaultdict(list))
+        s, a, r, t, stag = [sample[k] for k in ['s', 'a', 'r', 't', 'stag']]
 
-        for i, sample in enumerate(self.sample()):
-            i += 1
+        self.train()
 
-            s, a, r, t, stag, beta, w = [sample[k] for k in ['s', 'a', 'r', 't', 'stag', 'beta', 'w']]
+        with torch.no_grad():
+            self.pi_net(stag)
+            pi_tag_1 = self.pi_net.sample(self.rbi_samples)
+            pi_tag_2 = self.pi_net.sample(self.rbi_samples)
+            q_target_1 = self.q_target_1(stag, pi_tag_1).mean(dim=0)
+            q_target_2 = self.q_target_2(stag, pi_tag_2).mean(dim=0)
 
-            self.train()
+        q_target = torch.min(q_target_1, q_target_2)
+        g = r + (1 - t) * self.gamma ** self.n_steps * q_target
 
-            with torch.no_grad():
-                self.pi_net(stag)
-                pi_tag_1 = self.pi_net.sample(self.rbi_samples)
-                pi_tag_2 = self.pi_net.sample(self.rbi_samples)
-                q_target_1 = self.q_target_1(stag, pi_tag_1).mean(dim=0)
-                q_target_2 = self.q_target_2(stag, pi_tag_2).mean(dim=0)
+        qa = self.q_net_1(s, a)
+        loss_q = F.mse_loss(qa, g, reduction='mean')
 
-            q_target = torch.min(q_target_1, q_target_2)
-            g = r + (1 - t) * self.gamma ** self.n_steps * q_target
+        self.optimizer_q_1.zero_grad()
+        loss_q.backward()
+        if self.clip_q:
+            nn.utils.clip_grad_norm(self.q_net_1.parameters(), self.clip_q)
+        self.optimizer_q_1.step()
 
-            qa = self.q_net_1(s, a)
-            loss_q = F.mse_loss(qa, g, reduction='mean')
+        qa = self.q_net_2(s, a)
+        loss_q = F.mse_loss(qa, g, reduction='mean')
 
-            self.optimizer_q_1.zero_grad()
-            loss_q.backward()
-            if self.clip_q:
-                nn.utils.clip_grad_norm(self.q_net_1.parameters(), self.clip_q)
-            self.optimizer_q_1.step()
+        self.optimizer_q_2.zero_grad()
+        loss_q.backward()
+        if self.clip_q:
+            nn.utils.clip_grad_norm(self.q_net_2.parameters(), self.clip_q)
+        self.optimizer_q_2.step()
 
-            qa = self.q_net_2(s, a)
-            loss_q = F.mse_loss(qa, g, reduction='mean')
+        if not n % self.delayed_policy_update:
 
-            self.optimizer_q_2.zero_grad()
-            loss_q.backward()
-            if self.clip_q:
-                nn.utils.clip_grad_norm(self.q_net_2.parameters(), self.clip_q)
-            self.optimizer_q_2.step()
+            _, (beta, w) = max_reroute(s, self.pi_net, self.q_net_1, self.q_net_2, self.rbi_samples,
+                                       self.cmin, self.cmax, self.rbi_greed, self.rbi_epsilon)
 
-            if not i % self.delayed_policy_update:
+            beta = beta.permute(2, 0, 1)
+            w = w.permute(2, 0, 1)
 
-                _, (beta, w) = max_reroute(s, self.pi_net, self.q_net_1, self.q_net_2, self.rbi_samples,
-                                           self.cmin, self.cmax, self.rbi_greed, self.rbi_epsilon)
+            self.pi_net(s)
+            log_pi = self.pi_net.log_prob(beta)
 
-                beta = beta.permute(2, 0, 1)
-                w = w.permute(2, 0, 1)
+            loss_p = (1 - self.alpha_rbi) * (- log_pi * w).mean(dim=1).sum()
 
-                self.pi_net(s)
-                log_pi = self.pi_net.log_prob(beta)
+            loss_p -= self.alpha_rbi * self.pi_net.entropy().sum(dim=-1).mean()
 
-                loss_p = (1 - self.alpha_rbi) * (- log_pi * w).mean(dim=1).sum()
+            self.optimizer_p.zero_grad()
+            loss_p.backward()
+            if self.clip_p:
+                nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
+            self.optimizer_p.step()
 
-                # kl div with N(μ, 1)
-                mu = self.pi_net.params['loc']
-                std_1 = torch.ones_like(mu)
+            train_results['scalar']['q_est'].append(float(-loss_p))
 
-                # loss_p += self.alpha_rbi * self.pi_net.kl_divergence((mu, std_1), dirction='backward').sum(dim=-1).mean()
-                loss_p -= self.alpha_rbi * self.pi_net.entropy().sum(dim=-1).mean()
+            # soft_update(self.pi_net, self.pi_target, self.tau)
 
-                # self.pi_net(s)
-                # pi = self.pi_net.sample(self.rbi_samples)
-                #
-                # qa_1 = self.q_net_1(s, pi)
-                # qa_2 = self.q_net_2(s, pi)
-                # qa = torch.min(qa_1, qa_2)
-                #
-                # loss_p = -qa.mean(dim=0).mean()
+        train_results['scalar']['loss_q'].append(float(loss_q))
 
+        soft_update(self.q_net_1, self.q_target_1, self.tau)
+        soft_update(self.q_net_2, self.q_target_2, self.tau)
 
-                self.optimizer_p.zero_grad()
-                loss_p.backward()
-                if self.clip_p:
-                    nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
-                self.optimizer_p.step()
+        return train_results
 
-                results['scalar']['q_est'].append(float(-loss_p))
-
-                # soft_update(self.pi_net, self.pi_target, self.tau)
-
-            results['scalar']['loss_q'].append(float(loss_q))
-
-            soft_update(self.q_net_1, self.q_target_1, self.tau)
-            soft_update(self.q_net_2, self.q_target_2, self.tau)
-
-            # if not n % self.target_update:
-            #     self.load_state_dict(self.pi_target, self.pi_net.state_dict())
-            #     self.load_state_dict(self.q_target, self.q_net.state_dict())
-
-            if not i % self.train_epoch:
-
-                statistics = self.env.get_stats()
-                for k, v in statistics.items():
-                    for ki, vi in v.items():
-                        results[k][ki] = vi
-
-                results['scalar']['rb'] = self.replay_buffer.size
-                results['scalar']['env-steps'] = self.env_steps
-                results['scalar']['episodes'] = self.episodes
-                results['scalar']['train-steps'] = i
-
-                yield results
-                results = defaultdict(lambda: defaultdict(list))

@@ -65,10 +65,12 @@ def reinforcement(alg):
     n_offset = aux['n']
 
     # test_results = next(evaluation)
+    test_results = None
     for epoch, train_results in enumerate(alg.train()):
+    # for epoch, (train_results, test_results) in enumerate(alg.train()):
         n = n_offset + alg.env_steps + 1
 
-        exp.log_data(train_results, None, n, alg=alg if args.lognet else None)
+        exp.log_data(train_results, test_results, n, alg=alg if args.lognet else None)
 
         aux = {'n': n}
         alg.save_checkpoint(exp.checkpoint, aux)
@@ -76,8 +78,9 @@ def reinforcement(alg):
 
 def main():
 
-    env = BulletEnv(args.environment, n_steps=args.n_steps, gamma=args.gamma)
-    alg = get_algorithm(env)
+    envs = {k: BulletEnv(args.environment, n_steps=args.n_steps, gamma=args.gamma) for k in ['env_train', 'env_eval']}
+
+    alg = get_algorithm(**envs)
 
     exp.log_alg(alg)
 

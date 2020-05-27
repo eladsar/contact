@@ -495,15 +495,21 @@ class Policy(nn.Module):
         else:
             return torch.distributions.kl_divergence(q, self.distribution)
 
-    def _sample(self, method, n=None):
+    def _sample(self, method, n=None, expected_value=False):
 
-        if n is None:
+        if expected_value:
+            sample = self.distribution.mean
+            if type(n) is int:
+                sample = torch.repeat_interleave(sample.unsqueeze(0), n, dim=0)
+
+        elif n is None:
             sample = getattr(self.distribution, method)()
         else:
+
             if type(n) is int:
                 n = torch.Size([n])
-
             sample = getattr(self.distribution, method)(n)
+
         a = self.squash(sample)
         return a
 
