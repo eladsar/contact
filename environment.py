@@ -3,6 +3,7 @@ import torch
 import pybullet_envs
 import gym
 from collections import namedtuple, defaultdict
+from utils import Identity, ZFilter, RewardFilter
 
 # State = namedtuple('State', ('s', 'a', 'r', 't', 'k', 'stag'))
 
@@ -82,18 +83,33 @@ def desquash(a):
 
 class BulletEnv(Environment):
 
-    def __init__(self, name, render=False, cuda=True, n_steps=1, gamma=0.99, render_mode='rgb_array'):
+    def __init__(self, name, render=False, cuda=True, n_steps=1, gamma=0.99, render_mode='rgb_array',
+                 norm_rewards='none', norm_states=False, clip_obs=0, clip_rew=0):
 
         super(BulletEnv, self).__init__()
 
         self.torch = torch.cuda if cuda else torch
         self.name = name
         self.render_mode = render_mode
+        self.gamma = gamma
         # self.env = NormalizedActions(gym.make(name, render=render))
         self.env = gym.make(name, render=render)
 
         self.observation_space = self.env.observation_space
         self.action_space = self.env.action_space
+
+        self.ns = self.observation_space.shape[0]
+
+        # Support for state normalization or using time as a feature
+        self.state_filter = Identity()
+        if norm_states:
+            self.state_filter = ZFilter(self.state_filter, shape=[self.ns], clip=clip_obs)
+        # Support for rewards normalization
+        self.reward_filter = Identity()
+        if norm_rewards == "rewards":
+            self.reward_filter = ZFilter(self.reward_filter, shape=(), center=False, clip=clip_rew)
+        elif norm_rewards == "returns":
+            self.reward_filter = RewardFilter(self.reward_filter, shape=(), gamma=self.gamma, clip=clip_rew)
 
         self.n_steps = n_steps
         self.gamma = gamma ** (n_steps - self.torch.FloatTensor(n_steps).fill_(1).cumsum(0))
@@ -104,9 +120,11 @@ class BulletEnv(Environment):
 
     def process_reward(self, r):
 
+        r = self.reward_filter(r)
+
         return self.torch.FloatTensor([r])
 
-    def process_state(self, s):
+    def process_state(self, s, reset=False):
 
         # l = np.nan_to_num(self.env.observation_space.low, nan=0.0, posinf=0.0, neginf=0.0)
         # h = np.nan_to_num(self.env.observation_space.high, nan=0.0, posinf=0.0, neginf=0.0)
@@ -117,6 +135,7 @@ class BulletEnv(Environment):
         #
         # s = (s - mu) / sig
         # # s = np.tanh(s)
+        s = self.state_filter(s, reset=reset)
 
         return self.torch.FloatTensor(s).unsqueeze(0)
 
@@ -126,8 +145,9 @@ class BulletEnv(Environment):
         self.k = 0
         self.t = False
 
+        self.state_filter.reset()
         s = self.env.reset()
-        self.s = self.process_state(s)
+        self.s = self.process_state(s, reset=True)
         if self.render:
             self.image = self.env.render(mode=self.render_mode)
 

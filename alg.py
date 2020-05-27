@@ -10,6 +10,7 @@ import warnings
 import itertools
 from sampler import ReplayBuffer
 from tqdm import tqdm
+import math
 
 warnings.filterwarnings('ignore', category=UserWarning)
 
@@ -19,9 +20,9 @@ class Algorithm(object):
     def __init__(self, *largs, **kwargs):
 
         self.env_train = kwargs['env_train']
-        self.env_eval = kwargs['env_test']
-        self.na = self.env.action_space.shape[0]
-        self.ns = self.env.observation_space.shape[0]
+        self.env_eval = kwargs['env_eval']
+        self.na = self.env_train.action_space.shape[0]
+        self.ns = self.env_train.observation_space.shape[0]
 
         self.networks_dict = {}
         self.optimizers_dict = {}
@@ -34,6 +35,9 @@ class Algorithm(object):
         self.replay_buffer = ReplayBuffer(self.replay_buffer_size)
         self.env_steps = 0
         self.episodes = 0
+        self.epsilon /= math.sqrt(self.na)
+        self.alpha_rbi /= math.sqrt(self.na)
+        self.rbi_lr /= math.sqrt(self.na)
 
     def postprocess(self, sample):
 
@@ -85,7 +89,7 @@ class Algorithm(object):
 
         return name_dict
 
-    def play(self, test=False):
+    def play(self, evaluate=False):
         raise NotImplementedError
 
     def step(self):
@@ -104,9 +108,6 @@ class Algorithm(object):
                 self.env_steps += 1
                 yield state
 
-                if self.env_steps >= self.total_steps:
-                    break
-
     def offline_training(self, sample, train_results, n):
         return train_results
 
@@ -114,7 +115,7 @@ class Algorithm(object):
         return state, train_results
 
     def episodic_training(self, state, train_results):
-        return state, train_results
+        return train_results
 
     def train(self):
 
@@ -122,7 +123,7 @@ class Algorithm(object):
         train_results = defaultdict(lambda: defaultdict(list))
         test_results = defaultdict(lambda: defaultdict(list))
 
-        for i, state in tqdm(self.step()):
+        for i, state in tqdm(enumerate(self.step())):
             i += 1
 
             state, train_results = self.online_training(state, train_results)
@@ -131,15 +132,18 @@ class Algorithm(object):
             if not self.env_steps % self.steps_per_train and (self.replay_buffer.size >= self.min_replay_buffer or
                self.replay_buffer.size >= self.replay_buffer_size):
 
-                for sample in self.replay_buffer.sample(self.consecutive_train, self.batch):
-                    train_results = self.offline_training(sample, train_results, i)
+                for j, sample in enumerate(self.replay_buffer.sample(self.consecutive_train, self.batch)):
+
+                    n = i * self.consecutive_train + j
+                    train_results = self.offline_training(sample, train_results, n)
 
                 if not self.env_train:
                     train_results = self.episodic_training(state, train_results)
 
-            if not i % self.train_epoch:
+            if not i % self.test_epoch:
+                test_results = self.eval(test_results, i)
 
-                test_results = self.eval(test_results)
+            if not i % self.train_epoch:
 
                 statistics = self.env_train.get_stats()
                 for k, v in statistics.items():
@@ -150,23 +154,27 @@ class Algorithm(object):
                 train_results['scalar']['env-steps'] = self.env_steps
                 train_results['scalar']['episodes'] = self.episodes
                 train_results['scalar']['train-steps'] = i
-                test_results['scalar']['train-steps'] = i
 
                 yield train_results, test_results
                 train_results = defaultdict(lambda: defaultdict(list))
                 test_results = defaultdict(lambda: defaultdict(list))
 
-    def eval(self, test_results):
+            if i >= self.total_steps:
+                break
 
-        for i in range(self.test_episodes):
+    def eval(self, test_results, n):
+
+        for i in tqdm(range(self.test_episodes)):
 
             self.env_eval.reset()
 
             while self.env_eval:
-                self.play(test=True)
+                self.play(evaluate=True)
 
             test_results['scalar']['score'].append(self.env_eval.score)
+            test_results['scalar']['length'].append(self.env_eval.k)
 
+        test_results['scalar']['n'] = n
         return test_results
 
     def state_dict(self, net):
