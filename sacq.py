@@ -1,5 +1,4 @@
 from model import MultipleOptimizer, QNet, PiNet
-from config import args, exp
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -54,7 +53,8 @@ class SACQ(Algorithm):
         if self.entropy_tunning:
             self.target_entropy = -torch.prod(torch.Tensor(self.na).to(self.device)).item()
             self.log_alpha = torch.tensor([0.], requires_grad=True, device=self.device)
-            self.optimizer_alpha = torch.optim.Adam([self.log_alpha], lr=args.lr_q)
+            self.optimizer_alpha = torch.optim.Adam([self.log_alpha], lr=self.lr_q)
+            self.alpha = float(self.log_alpha.exp())
 
     def play(self, env, evaluate=False):
 
@@ -77,7 +77,8 @@ class SACQ(Algorithm):
             q_target_1 = self.q_target_1(stag, pi_tag)
             q_target_2 = self.q_target_2(stag, pi_tag)
 
-            q_target = torch.min(q_target_1, q_target_2) - float(self.alpha) * log_pi_tag
+            q_target = torch.min(q_target_1, q_target_2) - self.alpha * log_pi_tag
+            # q_target = torch.min(q_target_1, q_target_2) + self.alpha * self.pi_net.entropy().sum(dim=1)
             g = r + (1 - t) * self.gamma ** self.n_steps * q_target
 
         qa = self.q_net_1(s, a)
@@ -93,6 +94,10 @@ class SACQ(Algorithm):
         log_pi = self.pi_net.log_prob(pi).sum(dim=1)
 
         loss_p = (self.alpha * log_pi - qa).mean()
+        # loss_p = (-self.alpha * self.pi_net.entropy().sum(dim=1) - qa).mean()
+
+        with torch.no_grad():
+            entropy = self.pi_net.entropy().sum(dim=-1).mean()
 
         self.optimizer_p.zero_grad()
         loss_p.backward()
@@ -103,16 +108,19 @@ class SACQ(Algorithm):
 
         # alpha loss
         if self.entropy_tunning:
+
             alpha_loss = -(self.log_alpha * (log_pi + self.target_entropy).detach()).mean()
+            # alpha_loss = -(self.log_alpha * (-self.pi_net.entropy().sum(dim=1) + self.target_entropy).detach()).mean()
 
             self.optimizer_alpha.zero_grad()
             alpha_loss.backward()
             self.optimizer_alpha.step()
 
-            self.alpha = self.log_alpha.exp()
+            self.alpha = float(self.log_alpha.exp())
 
         train_results['scalar']['alpha'].append(float(self.alpha))
         train_results['scalar']['objective'].append(float(-loss_p))
+        train_results['scalar']['entropy'].append(float(entropy))
 
         self.optimizer_q_1.zero_grad()
         loss_q_1.backward()

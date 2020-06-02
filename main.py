@@ -7,6 +7,7 @@ from pg import PG
 from ddpg import DDPG
 from td3 import TD3
 from rbi import RBI
+from drbi import DRBI
 from sacv import SACV
 from sacq import SACQ
 from sspg import SSPG
@@ -25,6 +26,8 @@ def get_algorithm(*argv, **kwargs):
         return TD3(*argv, **kwargs)
     if args.algorithm == 'rbi':
         return RBI(*argv, **kwargs)
+    if args.algorithm == 'drbi':
+        return DRBI(*argv, **kwargs)
     if args.algorithm == 'sacv':
         return SACV(*argv, **kwargs)
     if args.algorithm == 'sacq':

@@ -79,8 +79,8 @@ parser.add_argument('--clip-p', type=float, default=0., help='Clip Pi Gradient L
 parser.add_argument('--clip-q', type=float, default=0., help='Clip Pi Gradient L2 norm')
 parser.add_argument('--weight-decay-p', type=float, default=0, help='Weight decay coefficient for Q-net')
 parser.add_argument('--weight-decay-q', type=float, default=0, help='Weight decay coefficient for π-net')
-parser.add_argument('--min-log', type=int, default=-20, help='min log')
-parser.add_argument('--max-log', type=int, default=2, help='max log')
+parser.add_argument('--min-std', type=int, default=1e-3, help='min log')
+parser.add_argument('--max-std', type=int, default=1e3, help='max log')
 boolean_feature("bias-p", True, 'Add bias to policy network')
 
 parser.add_argument('--warmup-steps', type=int, default=int(1e3), help='warm-up random steps')
@@ -102,13 +102,14 @@ parser.add_argument('--replay-buffer-size', type=int, default=int(1e6), help='To
 parser.add_argument('--n-steps', type=int, default=1, metavar='STEPS', help='Number of steps for multi-step learning')
 
 # rbi parameters
-parser.add_argument('--rbi-samples', type=int, default=256, help='policy samples for rbi training')
+parser.add_argument('--rbi-actor-samples', type=int, default=256, help='policy samples for rbi actor')
+parser.add_argument('--rbi-learner-samples', type=int, default=4, help='policy samples for rbi training')
 parser.add_argument('--cmin', type=float, default=0.5, metavar='c_min', help='Lower reroute threshold')
 parser.add_argument('--cmax', type=float, default=1.5, metavar='c_max', help='Upper reroute threshold')
 parser.add_argument('--rbi-epsilon', type=float, default=0.0, metavar='ε', help='Uniform sampling in RBI update')
 parser.add_argument('--kl-lambda', type=float, default=1., metavar='λ', help='parameter fot the kl non-parametrized constraint')
 parser.add_argument('--rbi-greed', type=float, default=0., help='Greedy part in RBI update')
-parser.add_argument('--alpha-rbi', type=float, default=0.1, help='max entropy vs. expected reward')
+parser.add_argument('--rbi-alpha', type=float, default=0.1, help='max entropy vs. expected reward')
 parser.add_argument('--rbi-lr', type=float, default=0.01, help='RBI learning rate')
 parser.add_argument('--rbi-delayed-policy-update', type=int, default=1, metavar='STEPS', help='steps between policy updates')
 

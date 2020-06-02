@@ -8,26 +8,34 @@ import torch.autograd as autograd
 import math
 
 
-def max_reroute(s, pi_net, q_net_1, q_net_2, n=100, cmin=0.5, cmax=1.5, greed=0.1, epsilon=0.01, lr=0.01):
+def max_reroute(s, pi_net, q_net_1, q_net_2, n=100, cmin=0.5, cmax=1.5, greed=0.1, epsilon=0.01, lr=0.01, grad=False):
 
-    with torch.no_grad():
+    if grad:
         pi_net(s)
-        beta = pi_net.sample(n)
+        pi = pi_net.rsample(n)
+    else:
+        with torch.no_grad():
+            pi_net(s)
+            pi = pi_net.sample(n)
 
-    beta = autograd.Variable(beta.data, requires_grad=True)
+    beta = autograd.Variable(pi.detach(), requires_grad=True)
     qa_1 = q_net_1(s, beta)
     qa_2 = q_net_2(s, beta)
-    # CHECK THE UNSQUEEZE IN ACTION!!
     qa = torch.min(qa_1, qa_2).unsqueeze(-1)
     gradients = autograd.grad(outputs=qa, inputs=beta, grad_outputs=torch.cuda.FloatTensor(qa.size()).fill_(1.),
                               create_graph=False, retain_graph=False, only_inputs=True)[0]
 
+    gradients = gradients.detach()
     beta = (beta + lr * gradients).detach()
 
     with torch.no_grad():
         qa_1 = q_net_1(s, beta)
         qa_2 = q_net_2(s, beta)
         qatag = torch.min(qa_1, qa_2).unsqueeze(-1)
+
+    dq = (qatag - qa.detach()) / torch.norm(lr * gradients, dim=-1, keepdim=True)
+    ngrad = gradients / torch.norm(gradients, dim=-1, keepdim=True)
+    dq = dq * ngrad
 
     rank = torch.argsort(torch.argsort(qatag, dim=0, descending=True), dim=0, descending=False)
     w = cmin * torch.ones_like(beta)
@@ -50,45 +58,16 @@ def max_reroute(s, pi_net, q_net_1, q_net_2, n=100, cmin=0.5, cmax=1.5, greed=0.
 
     a = torch.gather(beta, 2, prob.sample().unsqueeze(2)).squeeze(2)
 
-    return a, (beta, w)
+    beta = beta.permute(2, 0, 1)
+    w = w.permute(2, 0, 1)
+
+    return a, {'beta': beta, 'pi': pi, 'w': w, 'dq': dq}
 
 
-def max_kl(s, pi_net, q_net, n=100, lambda_kl=1.):
-
-    pi_net(s)
-
-    with torch.no_grad():
-        beta = pi_net.sample(n)
-
-    _, b, na = beta.shape
-
-    s = s.unsqueeze(0).expand(n, *s.shape)
-    s = s.view(n * b, *s.shape[2:])
-    a = beta.view(n * b, na)
-
-    with torch.no_grad():
-        q = q_net(s, a)
-
-    q = q.view(n, b, 1)
-    w = torch.softmax((q - q.sum(dim=0, keepdim=True)) / lambda_kl, dim=0)
-    w = torch.repeat_interleave(w, na, dim=2)
-
-    w = w.permute(1, 2, 0)
-    beta = beta.permute(1, 2, 0)
-
-    w = w / w.sum(dim=2, keepdim=True)
-
-    prob = torch.distributions.Categorical(probs=w)
-
-    a = torch.gather(beta, 2, prob.sample().unsqueeze(2)).squeeze(2)
-
-    return a, (beta, w)
-
-
-class RBI(Algorithm):
+class DRBI(Algorithm):
 
     def __init__(self, *largs, **kwargs):
-        super(RBI, self).__init__(*largs, **kwargs)
+        super(DRBI, self).__init__(*largs, **kwargs)
 
         pi_net = PiNet(self.ns, self.na, distribution='Normal')
         self.pi_net = pi_net.to(self.device)
@@ -120,21 +99,11 @@ class RBI(Algorithm):
         self.optimizer_p = torch.optim.Adam(self.pi_net.parameters(), lr=self.lr_p, betas=(0.9, 0.999),
                                     weight_decay=self.weight_decay_p)
 
-        self.alpha = self.rbi_alpha
         if self.entropy_tunning:
-            # self.target_entropy = -float(self.na)
-            std_target = 0.3 / math.sqrt(self.na)
-            self.target_entropy = self.na * 0.5 * math.log(2 * math.pi * math.e * (std_target ** 2))
-            print(f'target entropy: {self.target_entropy}')
-            self.lr_alpha = 0.01
-            # self.target_entropy = 1.5
-
-    def online_training(self, state, train_results):
-
-        state.pop('beta')
-        state.pop('w')
-
-        return state, train_results
+            self.target_entropy = -torch.prod(torch.Tensor(self.na).to(self.device)).item()
+            self.log_alpha = torch.tensor([-3.], requires_grad=True, device=self.device)
+            self.optimizer_alpha = torch.optim.Adam([self.log_alpha], lr=self.lr_q)
+            self.alpha = float(self.log_alpha.exp())
 
     # def play(self, env, evaluate=False):
     #
@@ -163,21 +132,17 @@ class RBI(Algorithm):
             return state
 
         if self.env_steps >= self.warmup_steps:
-            a, (beta, w) = max_reroute(env.s, self.pi_net, self.q_net_1, self.q_net_2, n=self.rbi_actor_samples,
+            a, _ = max_reroute(env.s, self.pi_net, self.q_net_1, self.q_net_2, n=self.rbi_actor_samples,
                                        cmin=self.cmin, cmax=self.cmax, greed=self.rbi_greed, epsilon=self.rbi_epsilon,
-                                       lr=self.rbi_lr)
+                                       lr=self.rbi_lr, grad=False)
 
             a = self.pi_net.squash(self.pi_net.desquash(a) + self.rbi_alpha * torch.zeros_like(a).normal_())
 
         else:
 
-            beta = torch.cuda.FloatTensor(1, self.na, self.rbi_actor_samples).normal_()
-            w = torch.ones_like(beta)
             a = None
 
         state = env(a)
-        state['beta'] = beta
-        state['w'] = w
 
         return state
 
@@ -192,14 +157,14 @@ class RBI(Algorithm):
         # else:
         #     q_net, optimizer_q, q_target, tag = self.q_net_2, self.optimizer_q_2, self.q_target_2, '2'
 
-        # with torch.no_grad():
-        #     pi_tag = self.pi_net(stag)
-        #     log_pi_tag = self.pi_net.log_prob(pi_tag).sum(dim=1)
-        #     q_target_1 = self.q_target_1(stag, pi_tag)
-        #     q_target_2 = self.q_target_2(stag, pi_tag)
-        #
-        #     q_target = torch.min(q_target_1, q_target_2) - self.alpha * log_pi_tag
-        #     g = r + (1 - t) * self.gamma ** self.n_steps * q_target
+        with torch.no_grad():
+            pi_tag = self.pi_net(stag)
+            log_pi_tag = self.pi_net.log_prob(pi_tag).sum(dim=1)
+            q_target_1 = self.q_target_1(stag, pi_tag)
+            q_target_2 = self.q_target_2(stag, pi_tag)
+
+            q_target = torch.min(q_target_1, q_target_2) - self.alpha * log_pi_tag
+            g = r + (1 - t) * self.gamma ** self.n_steps * q_target
 
         # with torch.no_grad():
         #     pi_tag = self.pi_net(stag)
@@ -209,34 +174,41 @@ class RBI(Algorithm):
         #     q_target = torch.min(q_target_1, q_target_2)
         #     g = r + (1 - t) * self.gamma ** self.n_steps * q_target
 
-        with torch.no_grad():
-            self.pi_net(stag)
-            pi_tag_1 = self.pi_net.sample(self.rbi_learner_samples)
-            pi_tag_2 = self.pi_net.sample(self.rbi_learner_samples)
-            q_target_1 = self.q_target_1(stag, pi_tag_1).mean(dim=0)
-            q_target_2 = self.q_target_2(stag, pi_tag_2).mean(dim=0)
+        # with torch.no_grad():
+        #     self.pi_net(stag)
+        #     pi_tag_1 = self.pi_net.sample(self.rbi_learner_samples)
+        #     pi_tag_2 = self.pi_net.sample(self.rbi_learner_samples)
+        #     q_target_1 = self.q_target_1(stag, pi_tag_1).mean(dim=0)
+        #     q_target_2 = self.q_target_2(stag, pi_tag_2).mean(dim=0)
+        #
+        #     v_target = torch.min(q_target_1, q_target_2)
+        #     g = r + (1 - t) * self.gamma ** self.n_steps * v_target
 
-            v_target = torch.min(q_target_1, q_target_2)
-            g = r + (1 - t) * self.gamma ** self.n_steps * v_target
+        qa = self.q_net_1(s, a)
+        loss_q_1 = F.mse_loss(qa, g, reduction='mean')
+
+        qa = self.q_net_2(s, a)
+        loss_q_2 = F.mse_loss(qa, g, reduction='mean')
 
         if not n % self.rbi_delayed_policy_update:
 
-            _, (beta, w) = max_reroute(s, self.pi_net, self.q_net_1, self.q_net_2, n=self.rbi_learner_samples,
+            _, mr = max_reroute(s, self.pi_net, self.q_net_1, self.q_net_2, n=self.rbi_learner_samples,
                                        cmin=self.cmin, cmax=self.cmax, greed=self.rbi_greed, epsilon=self.rbi_epsilon,
-                                       lr=self.rbi_lr)
+                                       lr=self.rbi_lr, grad=True)
 
-            beta = beta.permute(2, 0, 1)
-            w = w.permute(2, 0, 1)
+            w, pi, dq = mr['pi'], mr['w'], mr['dq']
 
-            self.pi_net(s)
-            log_pi = self.pi_net.log_prob(beta)
+            # loss_p = (-w * pi * dq).mean(dim=1).sum()
 
-            loss_p = (- log_pi * w).mean(dim=1).sum()
+            # print(w.shape)
 
-            entropy = self.pi_net.entropy().sum(dim=-1).mean()
-            # entropy = -(w * self.pi_net.log_prob(beta)).sum(dim=-1).mean()
+            # w = w / torch.abs(w).max()
 
-            loss_p -= self.alpha * entropy
+            loss_p = (-w * dq * pi).mean(dim=1).sum()
+
+            entropy = -self.pi_net.log_prob(pi).sum(dim=-1).mean()
+            # entropy = self.pi_net.entropy().sum(dim=-1).mean()
+            loss_p -= 0 * self.alpha * entropy
 
             self.optimizer_p.zero_grad()
             loss_p.backward()
@@ -245,20 +217,22 @@ class RBI(Algorithm):
                 nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
             self.optimizer_p.step()
 
+            real_entropy = self.pi_net.entropy().sum(dim=-1).mean()
             train_results['scalar']['objective'].append(float(-loss_p))
-            train_results['scalar']['entropy'].append(float(entropy))
+            train_results['scalar']['entropy'].append(float(real_entropy))
 
             # # alpha loss
+            # alpha loss
             if self.entropy_tunning:
+                alpha_loss = -(self.log_alpha * (-entropy + self.target_entropy).detach()).mean()
 
-                self.alpha = float(self.alpha * (1 - self.lr_alpha) + self.lr_alpha * F.relu(self.target_entropy - entropy))
-                train_results['scalar']['alpha'].append(float(self.alpha))
+                self.optimizer_alpha.zero_grad()
+                alpha_loss.backward()
+                self.optimizer_alpha.step()
 
-        qa = self.q_net_1(s, a)
-        loss_q_1 = F.mse_loss(qa, g, reduction='mean')
+                self.alpha = float(self.log_alpha.exp())
 
-        qa = self.q_net_2(s, a)
-        loss_q_2 = F.mse_loss(qa, g, reduction='mean')
+            train_results['scalar']['alpha'].append(float(self.alpha))
 
         self.optimizer_q_1.zero_grad()
         loss_q_1.backward()

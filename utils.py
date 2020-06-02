@@ -7,6 +7,15 @@ def soft_update(source, target, tau):
         target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
 
 
+def clipped_gd(x, dx, eta, gamma):
+
+    norm = torch.norm(dx, dim=-1, keepdim=True)
+    eta = torch.clamp_max(gamma * eta / norm, eta)
+
+    return x - eta * dx
+
+
+
 # def soft_update(net, target, tau):
 #
 #     state = net.state_dict()

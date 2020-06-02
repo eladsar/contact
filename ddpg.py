@@ -27,63 +27,44 @@ class DDPG(Algorithm):
     def __init__(self, env):
         super(DDPG, self).__init__()
 
-        self.env = env
-        n_a = env.action_space.shape[0]
-        n_s = env.observation_space.shape[0]
-
-        pi_net = PiNet(n_s, n_a)
+        pi_net = PiNet(self.ns, self.na)
         self.pi_net = pi_net.to(self.device)
 
-        pi_target = PiNet(n_s, n_a)
+        pi_target = PiNet(self.ns, self.na)
         self.pi_target = pi_target.to(self.device)
         self.load_state_dict(self.pi_target, self.pi_net.state_dict())
 
-        q_net = QNet(n_s, n_a)
+        q_net = QNet(self.ns, self.na)
         self.q_net = q_net.to(self.device)
 
-        q_target = QNet(n_s, n_a)
+        q_target = QNet(self.ns, self.na)
         self.q_target = q_target.to(self.device)
         self.load_state_dict(self.q_target, self.q_net.state_dict())
-
-        # sparse_parameters = [p for n, p in filter(lambda x: 'embedding' in x[0], self.q_net.named_parameters())]
-        # opt_sparse = torch.optim.SparseAdam(sparse_parameters, lr=self.lr_q * 100,
-        #                                     betas=(0.9, 0.999), eps=1e-04)
-        # opt_dense = torch.optim.Adam(list(set(self.q_net.parameters()).difference(sparse_parameters)), lr=self.lr_q, betas=(0.9, 0.999),
-        #                              eps=1e-04,  weight_decay=self.weight_decay)
-        # self.optimizer_q = MultipleOptimizer(opt_sparse, opt_dense)
-        #
-        # sparse_parameters = [p for n, p in filter(lambda x: 'embedding' in x[0], self.pi_net.named_parameters())]
-        # opt_sparse = torch.optim.SparseAdam(sparse_parameters, lr=self.lr_p * 100,
-        #                                     betas=(0.9, 0.999), eps=1e-04)
-        # opt_dense = torch.optim.Adam(list(set(self.pi_net.parameters()).difference(sparse_parameters)), lr=self.lr_p, betas=(0.9, 0.999),
-        #                              eps=1e-04,  weight_decay=self.weight_decay)
-        # self.optimizer_p = MultipleOptimizer(opt_sparse, opt_dense)
 
         self.optimizer_q = torch.optim.Adam(self.q_net.parameters(), lr=self.lr_q, betas=(0.9, 0.999),
                                      weight_decay=1e-2)
 
-        # eps = 1e-04,
         self.optimizer_p = torch.optim.Adam(self.pi_net.parameters(), lr=self.lr_p, betas=(0.9, 0.999),
                                     weight_decay=0)
 
-        self.noise = OrnsteinUhlenbeckActionNoise(torch.zeros(1, n_a).to(self.device),
-                                                  self.epsilon * torch.ones(1, n_a).to(self.device))
-        self.sample = self.actor_rb
+        self.noise = OrnsteinUhlenbeckActionNoise(torch.zeros(1, self.na).to(self.device),
+                                                  self.epsilon * torch.ones(1, self.na).to(self.device))
 
     def play(self, env, evaluate=False):
 
         if env.k == 0:
             self.noise.reset()
 
-        noise = self.noise()
-        with torch.no_grad():
+        noise = self.noise() if not evaluate else 0
 
-            if self.env_steps >= self.warmup_steps:
-                a = self.pi_net(self.env.s) + noise
-            else:
-                a = noise
+        if self.env_steps >= self.warmup_steps or evaluate:
+            with torch.no_grad():
+                a = self.pi_net(env.s) + noise
+                a = torch.clamp(a, min=-1, max=1)
+        else:
+            a = None
 
-        state = env(torch.clamp(a, min=-1, max=1))
+        state = env(a)
         return state
 
     def train(self):

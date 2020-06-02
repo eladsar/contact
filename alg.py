@@ -37,7 +37,7 @@ class Algorithm(object):
         self.env_steps = 0
         self.episodes = 0
         self.epsilon /= math.sqrt(self.na)
-        self.alpha_rbi /= math.sqrt(self.na)
+        self.rbi_alpha /= math.sqrt(self.na)
         self.rbi_lr /= math.sqrt(self.na)
 
     def postprocess(self, sample):

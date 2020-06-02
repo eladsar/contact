@@ -9,7 +9,10 @@ from torch.nn.utils import spectral_norm
 import math
 import numpy as np
 import itertools
-
+from torch.distributions import constraints
+from torch.distributions.exp_family import ExponentialFamily
+from torch.distributions.utils import _standard_normal, broadcast_all
+from numbers import Number
 
 class MultipleOptimizer:
     def __init__(self, *op):
@@ -22,6 +25,84 @@ class MultipleOptimizer:
     def step(self):
         for op in self.optimizers:
             op.step()
+
+
+class MyNormal(ExponentialFamily):
+
+    arg_constraints = {'loc': constraints.real, 'logscale': constraints.real}
+    support = constraints.real
+    has_rsample = True
+    _mean_carrier_measure = 0
+
+    @property
+    def mean(self):
+        return self.loc
+
+    @property
+    def stddev(self):
+        return self.scale
+
+    @property
+    def variance(self):
+        return self.scale.pow(2)
+
+    def __init__(self, loc, logscale, validate_args=None):
+
+        self.loc, self.logscale = broadcast_all(loc, logscale)
+
+        if isinstance(loc, Number) and isinstance(logscale, Number):
+            batch_shape = torch.Size()
+        else:
+            batch_shape = self.loc.size()
+        super(MyNormal, self).__init__(batch_shape, validate_args=validate_args)
+
+    def expand(self, batch_shape, _instance=None):
+        new = self._get_checked_instance(MyNormal, _instance)
+        batch_shape = torch.Size(batch_shape)
+        new.loc = self.loc.expand(batch_shape)
+        new.logscale = self.logscale.expand(batch_shape)
+        super(MyNormal, new).__init__(batch_shape, validate_args=False)
+        new._validate_args = self._validate_args
+        return new
+
+    @property
+    def scale(self):
+        return self.logscale.exp()
+
+    def sample(self, sample_shape=torch.Size()):
+        shape = self._extended_shape(sample_shape)
+        with torch.no_grad():
+            return torch.normal(self.loc.expand(shape), self.scale.expand(shape))
+
+    def rsample(self, sample_shape=torch.Size()):
+        shape = self._extended_shape(sample_shape)
+        eps = _standard_normal(shape, dtype=self.loc.dtype, device=self.loc.device)
+        return self.loc + eps * self.scale
+
+    def log_prob(self, value):
+        if self._validate_args:
+            self._validate_sample(value)
+        return -((value - self.loc) ** 2) / (2 * self.variance) - self.logscale - math.log(math.sqrt(2 * math.pi))
+
+    def cdf(self, value):
+        if self._validate_args:
+            self._validate_sample(value)
+        return 0.5 * (1 + torch.erf((value - self.loc) * self.scale.reciprocal() / math.sqrt(2)))
+
+    def icdf(self, value):
+        if self._validate_args:
+            self._validate_sample(value)
+        return self.loc + self.scale * torch.erfinv(2 * value - 1) * math.sqrt(2)
+
+    def entropy(self):
+        return 0.5 + 0.5 * math.log(2 * math.pi) + self.logscale
+
+    @property
+    def _natural_params(self):
+        return (self.loc / self.scale.pow(2), -0.5 * self.scale.pow(2).reciprocal())
+
+    def _log_normalizer(self, x, y):
+        return -0.25 * x.pow(2) / y + 0.5 * torch.log(-math.pi / y)
 
 
 class GradientReversalFunction(Function):
@@ -146,35 +227,6 @@ class LinearHead(nn.Module):
             y = y.squeeze(-1)
 
         return y
-
-
-# class FCNet(nn.Module):
-#
-#     def __init__(self, n=1):
-#         super(FCNet, self).__init__()
-#         #         self.fc = nn.Sequential(nn.Linear(actions, layer, bias=True),
-#         #                                 activation(),
-#         #                                 nn.Linear(layer, layer, bias=True),
-#         #                                 activation(),
-#         #                                 nn.Linear(layer, layer//2, bias=True),
-#         #                                 activation(),
-#         #                                 nn.Linear(layer//2, n, bias=True))
-#
-#         self.fc = nn.Sequential(nn.Linear(actions, layer, bias=True),
-#                                 SeqResBlock(n_res, layer),
-#                                 nn.ReLU(),
-#                                 nn.Linear(layer, n, bias=True))
-#
-#         self.n = n
-#
-#         init_weights(self, init='ortho')
-#
-#     def forward(self, x):
-#         x = self.fc(x)
-#         if self.n == 1:
-#             x = x.squeeze(1)
-#
-#         return x
 
 
 class SplineEmbedding(nn.Module):
@@ -374,7 +426,7 @@ def fan_in_uniform_init(tensor, fan_in=None):
 
 
 def tanh_grad(x):
-    x = torch.clamp_min(1 - torch.tanh(x) ** 2, min=1e-8)
+    x = torch.clamp_min(1 - torch.tanh(x) ** 2, min=1e-5)
     return torch.log(x)
 
 
@@ -430,6 +482,8 @@ class Policy(nn.Module):
 
         if distribution == 'deterministic':
             self.generator = Deterministic
+        elif distribution == 'Normal':
+            self.generator = MyNormal
         else:
             self.generator = getattr(torch.distributions, distribution)
 
@@ -483,7 +537,7 @@ class Policy(nn.Module):
 
     def entropy(self):
 
-        return self.distribution.entropy()
+        return self.distribution.entropy() - self.da_du(self.params['loc'])
 
     def forward(self, evaluate=False, **params):
 
@@ -542,9 +596,9 @@ class ActorTD3(Policy):
 
         if self.form in ['Normal', 'Uniform']:
             logstd = self.std_head(s)
-            logstd = torch.clamp(logstd, min=args.min_log, max=args.max_log)
-            std = logstd.exp()
-            params = {'loc': mu, 'scale': std}
+            logstd = torch.clamp(logstd, math.log(args.min_std), math.log(args.max_std))
+            # std = logstd.exp()
+            params = {'loc': mu, 'logscale': logstd}
         else:
             params = {'loc': mu}
 
