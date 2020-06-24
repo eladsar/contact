@@ -60,6 +60,7 @@ parser.add_argument('--total-steps', type=int, default=int(1e6), metavar='STEPS'
 parser.add_argument('--train-epoch', type=int, default=1000, metavar='STEPS', help='Length of each epoch')
 parser.add_argument('--test-epoch', type=int, default=10000, metavar='STEPS', help='Test every this number of steps')
 parser.add_argument('--test-episodes', type=int, default=10, metavar='STEPS', help='Length of test epoch')
+parser.add_argument('--max-episode-length', type=int, default=1000, metavar='STEPS', help='Maximal episode length')
 
 # environment parameters
 
@@ -91,6 +92,7 @@ parser.add_argument('--start-policy-update', type=int, default=0, help='minimal 
 # RL parameters
 
 parser.add_argument('--gamma', type=float, default=0.99, help='Discount Factor')
+parser.add_argument('--lambda-gae', type=float, default=0.95, help='Discount Factor for GAE estimator')
 parser.add_argument('--epsilon', type=float, default=0.1, metavar='ε', help='exploration parameter')
 parser.add_argument('--epsilon-warmup', type=float, default=0.1, metavar='ε', help='warm-up exploration parameter')
 parser.add_argument("--tau", default=0.005, type=float, help="Update factor for the soft update of the target networks")

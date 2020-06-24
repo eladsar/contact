@@ -78,6 +78,9 @@ class ReplayBuffer(object):
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
 
+    def get_tail(self, tail):
+        return {k: v[:-tail] for k, v in self.states.items()}
+
     def sample(self, consecutive_train, batch_size, tail=None):
 
         if tail is None:

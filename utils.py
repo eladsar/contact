@@ -260,8 +260,101 @@ class Identity:
         pass
 
 
-def generalized_advantage_estimation(r, v, gamma, lambda_gae):
+def generalized_advantage_estimation(r, t, e, v1, v2, gamma, lambda_gae):
 
-    return (1 - lambda_gae)
+    b = torch.FloatTensor([1, 0], device=r.device)
+    aa = torch.FloatTensor([1, -gamma], device=r.device)
+    av = torch.FloatTensor([1, gamma * lambda_gae], device=r.device)
+
+    i = torch.nonzero(e).flatten()
+    if i[-1] + 1 == len(e):
+        i = torch.cat([torch.LongTensor([0], device=i.device), i+1])
+    else:
+        i = torch.cat([torch.LongTensor([0], device=i.device), i + 1, torch.LongTensor([len(e)], device=i.device)])
+
+    i = list(i)
+
+    r = torch.split(r, i)
+    t = torch.split(t, i)
+    v1 = torch.split(v1, i)
+    v2 = torch.split(v2, i)
+
+    a = []
+    v = []
+
+    for ri, ti, v1i, v2i in zip(r, t, v1, v2):
+
+        delta = -v1i + ri + gamma * (1 - ti) * v2i
+
+        a.append(lfilter(delta.flip(0), aa, b).flip(0))
+        v.append(lfilter(ri.flip(0), av, b).flip(0))
+
+    a = torch.cat(a)
+    v = torch.cat(v)
+
+    return a, v
 
 
+def lfilter(waveform, a_coeffs, b_coeffs):
+    r"""Perform an IIR filter by evaluating difference equation.
+
+    Args:
+        waveform (Tensor): audio waveform of dimension of `(..., time)`.  Must be normalized to -1 to 1.
+        a_coeffs (Tensor): denominator coefficients of difference equation of dimension of `(n_order + 1)`.
+                                Lower delays coefficients are first, e.g. `[a0, a1, a2, ...]`.
+                                Must be same size as b_coeffs (pad with 0's as necessary).
+        b_coeffs (Tensor): numerator coefficients of difference equation of dimension of `(n_order + 1)`.
+                                 Lower delays coefficients are first, e.g. `[b0, b1, b2, ...]`.
+                                 Must be same size as a_coeffs (pad with 0's as necessary).
+
+    Returns:
+        Tensor: Waveform with dimension of `(..., time)`.  Output will be clipped to -1 to 1.
+    """
+    # pack batch
+    shape = waveform.size()
+    waveform = waveform.view(-1, shape[-1])
+
+    assert (a_coeffs.size(0) == b_coeffs.size(0))
+    assert (len(waveform.size()) == 2)
+    assert (waveform.device == a_coeffs.device)
+    assert (b_coeffs.device == a_coeffs.device)
+
+    device = waveform.device
+    dtype = waveform.dtype
+    n_channel, n_sample = waveform.size()
+    n_order = a_coeffs.size(0)
+    n_sample_padded = n_sample + n_order - 1
+    assert (n_order > 0)
+
+    # Pad the input and create output
+    padded_waveform = torch.zeros(n_channel, n_sample_padded, dtype=dtype, device=device)
+    padded_waveform[:, (n_order - 1):] = waveform
+    padded_output_waveform = torch.zeros(n_channel, n_sample_padded, dtype=dtype, device=device)
+
+    # Set up the coefficients matrix
+    # Flip coefficients' order
+    a_coeffs_flipped = a_coeffs.flip(0)
+    b_coeffs_flipped = b_coeffs.flip(0)
+
+    # calculate windowed_input_signal in parallel
+    # create indices of original with shape (n_channel, n_order, n_sample)
+    window_idxs = torch.arange(n_sample, device=device).unsqueeze(0) + torch.arange(n_order, device=device).unsqueeze(1)
+    window_idxs = window_idxs.repeat(n_channel, 1, 1)
+    window_idxs += (torch.arange(n_channel, device=device).unsqueeze(-1).unsqueeze(-1) * n_sample_padded)
+    window_idxs = window_idxs.long()
+    # (n_order, ) matmul (n_channel, n_order, n_sample) -> (n_channel, n_sample)
+    input_signal_windows = torch.matmul(b_coeffs_flipped, torch.take(padded_waveform, window_idxs))
+
+    for i_sample, o0 in enumerate(input_signal_windows.t()):
+        windowed_output_signal = padded_output_waveform[:, i_sample:(i_sample + n_order)]
+        o0.sub_(torch.mv(windowed_output_signal, a_coeffs_flipped))
+        o0.div_(a_coeffs[0])
+
+        padded_output_waveform[:, i_sample + n_order - 1] = o0
+
+    output = torch.clamp(padded_output_waveform[:, (n_order - 1):], min=-1., max=1.)
+
+    # unpack batch
+    output = output.view(shape[:-1] + output.shape[-1:])
+
+    return output

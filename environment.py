@@ -205,7 +205,7 @@ class BulletEnv(Environment):
         r = self.process_reward(r)
 
         state = {'s': self.s, 'r': r, 't': self.torch.FloatTensor([int(actor_t)]),
-                 'k': self.torch.LongTensor([self.k]), 'a': a, 'stag': s}
+                 'k': self.torch.LongTensor([self.k]), 'a': a, 'stag': s, 'e': self.torch.FloatTensor([bool(self)])}
 
         self.s = s
 

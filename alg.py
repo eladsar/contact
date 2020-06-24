@@ -115,7 +115,7 @@ class Algorithm(object):
     def online_training(self, state, train_results):
         return state, train_results
 
-    def episodic_training(self, state, train_results):
+    def episodic_training(self, train_results, k):
         return train_results
 
     def train_mode(self):
@@ -154,8 +154,8 @@ class Algorithm(object):
                     n = i * self.consecutive_train + j
                     train_results = self.replay_buffer_training(sample, train_results, n)
 
-                if not self.env_train:
-                    train_results = self.episodic_training(state, train_results)
+            if not i % self.max_episode_length:
+                train_results = self.episodic_training(train_results, self.max_episode_length)
 
             if not i % self.test_epoch:
                 test_results = self.eval(test_results, i)
