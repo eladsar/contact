@@ -83,11 +83,20 @@ class ReplayBuffer(object):
 
     def sample(self, consecutive_train, batch_size, tail=None):
 
+        n = consecutive_train * batch_size
         if tail is None:
-            indices = torch.randint(self.size, size=(consecutive_train, batch_size))
+
+            indices = torch.randperm(self.size * max(1, n // self.size + 1)) % self.size
+            indices = indices[:n].unsqueeze(1).view(consecutive_train, batch_size)
+
+            # indices = torch.randint(self.size, size=(consecutive_train, batch_size))
         else:
             tail = min(tail, self.size)
-            indices = torch.randint(tail, size=(consecutive_train, batch_size))
+            indices = torch.randperm(tail * max(1, n // tail + 1)) % tail
+            indices = indices[:n].unsqueeze(1).view(consecutive_train, batch_size)
+
+            # indices = torch.randint(tail, size=(consecutive_train, batch_size))
+
             indices = (indices - self.ptr) % self.size
 
         for ind in indices:

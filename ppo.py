@@ -63,7 +63,9 @@ class SACQ(Algorithm):
 
         a, v_target = generalized_advantage_estimation(r, t, e, v1, v2, self.gamma, self.lambda_gae)
 
+        indices = torch.randint(k, size=(self.steps_per_episode, self.batch_size))
 
+        # for sample in samples:
 
         return train_results
 

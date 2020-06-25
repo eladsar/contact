@@ -98,6 +98,7 @@ parser.add_argument('--epsilon-warmup', type=float, default=0.1, metavar='ε', h
 parser.add_argument("--tau", default=0.005, type=float, help="Update factor for the soft update of the target networks")
 parser.add_argument('--target-update', type=int, default=1000, metavar='BATCHES', help='update targets every number of steps')
 
+parser.add_argument('--steps-per-episode', type=int, default=10, metavar='STEPS', help='number of optimization steps per episode for on-policy algorithms')
 parser.add_argument('--steps-per-train', type=int, default=1, metavar='STEPS', help='number of steps between training epochs')
 parser.add_argument('--consecutive-train', type=int, default=1, metavar='STEPS', help='number of consecutive training iterations')
 parser.add_argument('--replay-buffer-size', type=int, default=int(1e6), help='Total replay memory size')
