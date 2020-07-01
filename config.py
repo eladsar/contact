@@ -7,7 +7,8 @@ import pwd
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 from torch.utils.tensorboard import SummaryWriter
-from distutils.dir_util import copy_tree
+# from distutils.dir_util import copy_tree
+from shutil import copytree
 import sys
 import torch
 import pandas as pd
@@ -15,9 +16,11 @@ import shutil
 from loguru import logger
 import random
 from collections import defaultdict
+from utils import include_patterns
 
 project_name = 'contact'
 username = pwd.getpwuid(os.geteuid()).pw_name
+
 
 
 def boolean_feature(feature, default, help):
@@ -94,11 +97,13 @@ parser.add_argument('--start-policy-update', type=int, default=0, help='minimal 
 parser.add_argument('--gamma', type=float, default=0.99, help='Discount Factor')
 parser.add_argument('--lambda-gae', type=float, default=0.95, help='Discount Factor for GAE estimator')
 parser.add_argument('--epsilon', type=float, default=0.1, metavar='ε', help='exploration parameter')
+parser.add_argument('--eps-ppo', type=float, default=0.2, metavar='ε', help='PPO epsilon parameter')
+parser.add_argument('--target-kl', type=float, default=0.015, metavar='KL', help='Maximal KL distance in PPO optimization')
 parser.add_argument('--epsilon-warmup', type=float, default=0.1, metavar='ε', help='warm-up exploration parameter')
 parser.add_argument("--tau", default=0.005, type=float, help="Update factor for the soft update of the target networks")
 parser.add_argument('--target-update', type=int, default=1000, metavar='BATCHES', help='update targets every number of steps')
 
-parser.add_argument('--steps-per-episode', type=int, default=10, metavar='STEPS', help='number of optimization steps per episode for on-policy algorithms')
+parser.add_argument('--steps-per-episode', type=int, default=100, metavar='STEPS', help='number of optimization steps per episode for on-policy algorithms')
 parser.add_argument('--steps-per-train', type=int, default=1, metavar='STEPS', help='number of steps between training epochs')
 parser.add_argument('--consecutive-train', type=int, default=1, metavar='STEPS', help='number of consecutive training iterations')
 parser.add_argument('--replay-buffer-size', type=int, default=int(1e6), help='Total replay memory size')
@@ -242,14 +247,18 @@ class Experiment(object):
             os.makedirs(self.tensorboard_dir)
             os.makedirs(self.checkpoints_dir)
             os.makedirs(self.results_dir)
-            os.makedirs(self.code_dir)
+            # os.makedirs(self.code_dir)
 
             # make log dirs
             os.makedirs(os.path.join(self.results_dir, 'train'))
             os.makedirs(os.path.join(self.results_dir, 'eval'))
 
             # copy code to dir
-            copy_tree(os.path.dirname(os.path.realpath(__file__)), self.code_dir)
+            # copy_tree(os.path.dirname(os.path.realpath(__file__)), self.code_dir)
+
+            copytree(os.path.dirname(os.path.realpath(__file__)), self.code_dir,
+                     ignore=include_patterns('*.py', '*.md', '*.ipynb'))
+
 
             # write args to file
             filename = os.path.join(self.root, "args.txt")

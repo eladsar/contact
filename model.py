@@ -691,7 +691,7 @@ class CriticTD3(nn.Module):
         self.l2 = nn.Linear(256, 256)
         self.l3 = nn.Linear(256, 1)
 
-    def forward(self, s, a):
+    def forward(self, s, a=None):
 
         shape = s.shape
         if self.actions:

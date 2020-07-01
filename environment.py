@@ -179,7 +179,7 @@ class BulletEnv(Environment):
     def step(self, a=None):
 
         if a is None:
-            a = torch.FloatTensor(self.action_space.sample()).unsqueeze(0)
+            a = self.torch.FloatTensor(self.action_space.sample()).unsqueeze(0)
         if len(a.shape) != 2:
             a = a.unsqueeze(0)
 
@@ -205,7 +205,7 @@ class BulletEnv(Environment):
         r = self.process_reward(r)
 
         state = {'s': self.s, 'r': r, 't': self.torch.FloatTensor([int(actor_t)]),
-                 'k': self.torch.LongTensor([self.k]), 'a': a, 'stag': s, 'e': self.torch.FloatTensor([bool(self)])}
+                 'k': self.torch.LongTensor([self.k]), 'a': a, 'stag': s, 'e': self.torch.FloatTensor([not bool(self)])}
 
         self.s = s
 

@@ -79,7 +79,8 @@ class ReplayBuffer(object):
         self.size = min(self.size + 1, self.max_size)
 
     def get_tail(self, tail):
-        return {k: v[:-tail] for k, v in self.states.items()}
+        indices = torch.arange(self.ptr-tail, self.ptr) % self.max_size
+        return {k: v[indices] for k, v in self.states.items()}
 
     def sample(self, consecutive_train, batch_size, tail=None):
 

@@ -16,16 +16,16 @@ import copy
 from apex import amp
 from operator import itemgetter
 from collections import namedtuple
-from utils import soft_update, OrnsteinUhlenbeckActionNoise, RandomNoise, generalized_advantage_estimation
+from utils import soft_update, OrnsteinUhlenbeckActionNoise, RandomNoise, generalized_advantage_estimation, iter_dict
 
 
-class SACQ(Algorithm):
+class PPO(Algorithm):
 
     def __init__(self, *largs, **kwargs):
-        super(SACQ, self).__init__(*largs, **kwargs)
+        super(PPO, self).__init__(*largs, **kwargs)
 
-        self.pi_net = PiNet(self.ns, self.na, distribution='Normal').to(self.device)
-        self.v_net = QNet(self.ns, 1).to(self.device)
+        self.pi_net = PiNet(self.ns, self.na, distribution='Normal', bounded=False).to(self.device)
+        self.v_net = QNet(self.ns, 0).to(self.device)
 
         self.optimizer_v = torch.optim.Adam(self.v_net.parameters(), lr=self.lr_q, betas=(0.9, 0.999),
                                               weight_decay=self.weight_decay_q)
@@ -35,24 +35,26 @@ class SACQ(Algorithm):
 
     def play(self, env, evaluate=False):
 
-        if self.env_steps >= self.warmup_steps or evaluate:
-            with torch.no_grad():
-                a = self.pi_net(env.s, evaluate=evaluate)
-        else:
+        with torch.no_grad():
+            a = self.pi_net(env.s, evaluate=evaluate)
+
+        if not (self.env_steps >= self.warmup_steps or evaluate):
             a = None
 
         state = env(a)
+        state['logp'] = self.pi_net.log_prob(state['a']).detach()
+
         return state
 
-    def episodic_training(self, train_results, k):
+    def episodic_training(self, train_results, tail):
 
-        episode = self.replay_buffer.get_tail(k)
+        episode = self.replay_buffer.get_tail(tail)
 
         sl = episode['s']
-        sl = torch.chunk(sl, int(len(sl) + 1))
+        sl = list(torch.chunk(sl, int((len(sl) / self.batch) + 1)))
         sl[-1] = torch.cat([sl[-1], episode['stag'][-1].unsqueeze(0)])
 
-        s, a, r, t, stag, e = [episode[k] for k in ['s', 'a', 'r', 't', 'stag', 'e']]
+        s, r, t, e = [episode[k] for k in ['s', 'r', 't', 'e']]
 
         v = []
         for s in sl:
@@ -61,87 +63,63 @@ class SACQ(Algorithm):
         v = torch.cat(v).detach()
         v1, v2 = v[:-1], v[1:]
 
-        a, v_target = generalized_advantage_estimation(r, t, e, v1, v2, self.gamma, self.lambda_gae)
+        adv, v_target = generalized_advantage_estimation(r, t, e, v1, v2, self.gamma, self.lambda_gae)
 
-        indices = torch.randint(k, size=(self.steps_per_episode, self.batch_size))
+        episode['adv'] = adv
+        episode['v_target'] = v_target
 
-        # for sample in samples:
+        n = self.steps_per_episode * self.batch
+        indices = torch.randperm(tail * max(1, n // tail + 1)) % tail
+        indices = indices[:n].unsqueeze(1).view(self.steps_per_episode, self.batch)
 
-        return train_results
+        samples = {k: v[indices] for k, v in episode.items()}
 
-    def replay_buffer_training(self, sample, train_results, n):
+        for i, sample in enumerate(tqdm(iter_dict(samples))):
+            s, a, r, t, stag, adv, v_target, log_pi_old = [sample[k] for k in ['s', 'a', 'r', 't',
+                                                                         'stag', 'adv', 'v_target', 'logp']]
+            self.pi_net(s)
+            log_pi = self.pi_net.log_prob(a)
+            ratio = torch.exp((log_pi - log_pi_old).sum(dim=1))
 
-        s, a, r, t, stag = [sample[k] for k in ['s', 'a', 'r', 't', 'stag']]
+            clip_adv = torch.clamp(ratio, 1 - self.eps_ppo, 1 + self.eps_ppo) * adv
+            loss_p = -(torch.min(ratio * adv, clip_adv)).mean()
 
-        with torch.no_grad():
-            pi_tag = self.pi_net(stag)
-            log_pi_tag = self.pi_net.log_prob(pi_tag).sum(dim=1)
-            q_target_1 = self.q_target_1(stag, pi_tag)
-            q_target_2 = self.q_target_2(stag, pi_tag)
+            approx_kl = -float((log_pi - log_pi_old).sum(dim=1).mean())
+            ent = float(self.pi_net.entropy().sum(dim=1).mean())
 
-            q_target = torch.min(q_target_1, q_target_2) - self.alpha * log_pi_tag
-            # q_target = torch.min(q_target_1, q_target_2) + self.alpha * self.pi_net.entropy().sum(dim=1)
-            g = r + (1 - t) * self.gamma ** self.n_steps * q_target
+            if approx_kl > self.target_kl:
+                train_results['scalar']['pi_opt_rounds'].append(i)
+                break
 
-        qa = self.q_net_1(s, a)
-        loss_q_1 = F.mse_loss(qa, g, reduction='mean')
+            clipped = ratio.gt(1 + self.eps_ppo) | ratio.lt(1 - self.eps_ppo)
+            clipfrac = float(torch.as_tensor(clipped, dtype=torch.float32).mean())
 
-        qa = self.q_net_2(s, a)
-        loss_q_2 = F.mse_loss(qa, g, reduction='mean')
+            self.optimizer_p.zero_grad()
+            loss_p.backward()
 
-        pi = self.pi_net(s)
-        qa_1 = self.q_net_1(s, pi)
-        qa_2 = self.q_net_2(s, pi)
-        qa = torch.min(qa_1, qa_2)
-        log_pi = self.pi_net.log_prob(pi).sum(dim=1)
+            if self.clip_p:
+                nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
+            self.optimizer_p.step()
 
-        loss_p = (self.alpha * log_pi - qa).mean()
-        # loss_p = (-self.alpha * self.pi_net.entropy().sum(dim=1) - qa).mean()
+            train_results['scalar']['loss_p'].append(float(loss_p))
+            train_results['scalar']['approx_kl'].append(approx_kl)
+            train_results['scalar']['ent'].append(ent)
+            train_results['scalar']['clipfrac'].append(clipfrac)
 
-        with torch.no_grad():
-            entropy = self.pi_net.entropy().sum(dim=-1).mean()
+        # for sample in tqdm(iter_dict(samples)):
+        #     s, a, r, t, stag, adv, v_target, log_pi_old = [sample[k] for k in ['s', 'a', 'r', 't',
+        #                                                                        'stag', 'adv', 'v_target', 'logp']]
 
-        self.optimizer_p.zero_grad()
-        loss_p.backward()
+            v = self.v_net(s)
+            loss_v = F.mse_loss(v, v_target, reduction='mean')
 
-        if self.clip_p:
-            nn.utils.clip_grad_norm(self.pi_net.parameters(), self.clip_p)
-        self.optimizer_p.step()
+            self.optimizer_v.zero_grad()
+            loss_v.backward()
+            if self.clip_q:
+                nn.utils.clip_grad_norm(self.v_net.parameters(), self.clip_q)
+            self.optimizer_v.step()
 
-        # alpha loss
-        if self.entropy_tunning:
-
-            alpha_loss = -(self.log_alpha * (log_pi + self.target_entropy).detach()).mean()
-            # alpha_loss = -(self.log_alpha * (-self.pi_net.entropy().sum(dim=1) + self.target_entropy).detach()).mean()
-
-            self.optimizer_alpha.zero_grad()
-            alpha_loss.backward()
-            self.optimizer_alpha.step()
-
-            self.alpha = float(self.log_alpha.exp())
-
-        train_results['scalar']['alpha'].append(float(self.alpha))
-        train_results['scalar']['objective'].append(float(-loss_p))
-        train_results['scalar']['entropy'].append(float(entropy))
-
-        self.optimizer_q_1.zero_grad()
-        loss_q_1.backward()
-        if self.clip_q:
-            nn.utils.clip_grad_norm(self.q_net_1.parameters(), self.clip_q)
-        self.optimizer_q_1.step()
-
-        self.optimizer_q_2.zero_grad()
-        loss_q_2.backward()
-
-        if self.clip_q:
-            nn.utils.clip_grad_norm(self.q_net_2.parameters(), self.clip_q)
-        self.optimizer_q_2.step()
-
-
-        train_results['scalar']['loss_q_1'].append(float(loss_q_1))
-        train_results['scalar']['loss_q_2'].append(float(loss_q_2))
-
-        soft_update(self.q_net_1, self.q_target_1, self.tau)
-        soft_update(self.q_net_2, self.q_target_2, self.tau)
+            train_results['scalar']['loss_v'].append(float(loss_v))
 
         return train_results
+

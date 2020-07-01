@@ -1,6 +1,7 @@
 import torch
 import numpy as np
-
+from os.path import isdir, join
+from fnmatch import fnmatch, filter
 
 def soft_update(source, target, tau):
     for target_param, param in zip(target.parameters(), source.parameters()):
@@ -262,22 +263,29 @@ class Identity:
 
 def generalized_advantage_estimation(r, t, e, v1, v2, gamma, lambda_gae):
 
-    b = torch.FloatTensor([1, 0], device=r.device)
-    aa = torch.FloatTensor([1, -gamma], device=r.device)
-    av = torch.FloatTensor([1, gamma * lambda_gae], device=r.device)
+    device = r.device
+    b = torch.FloatTensor([1, 0]).to(device)
+    aa = torch.FloatTensor([1, -gamma * lambda_gae]).to(device)
+    av = torch.FloatTensor([1, -gamma]).to(device)
 
     i = torch.nonzero(e).flatten()
-    if i[-1] + 1 == len(e):
-        i = torch.cat([torch.LongTensor([0], device=i.device), i+1])
+    if len(i):
+        if (i[-1] + 1) == len(e):
+            i = torch.cat([torch.LongTensor([0]).to(device), i+1])
+        else:
+            i = torch.cat([torch.LongTensor([0]).to(device), i + 1, torch.LongTensor([len(e)]).to(device)])
+
+        i = list(i[1:] - i[:-1])
+
+        r = torch.split(r, i)
+        t = torch.split(t, i)
+        v1 = torch.split(v1, i)
+        v2 = torch.split(v2, i)
     else:
-        i = torch.cat([torch.LongTensor([0], device=i.device), i + 1, torch.LongTensor([len(e)], device=i.device)])
-
-    i = list(i)
-
-    r = torch.split(r, i)
-    t = torch.split(t, i)
-    v1 = torch.split(v1, i)
-    v2 = torch.split(v2, i)
+        r = [r]
+        t = [t]
+        v1 = [v1]
+        v2 = [v2]
 
     a = []
     v = []
@@ -352,9 +360,33 @@ def lfilter(waveform, a_coeffs, b_coeffs):
 
         padded_output_waveform[:, i_sample + n_order - 1] = o0
 
-    output = torch.clamp(padded_output_waveform[:, (n_order - 1):], min=-1., max=1.)
+    # output = torch.clamp(padded_output_waveform[:, (n_order - 1):], min=-1., max=1.)
+    output = padded_output_waveform[:, (n_order - 1):]
 
     # unpack batch
     output = output.view(shape[:-1] + output.shape[-1:])
 
     return output
+
+
+def iter_dict(d):
+    for i in range(len(d[list(d.keys())[0]])):
+        yield {k: v[i] for k, v in d.items()}
+
+
+def include_patterns(*patterns):
+    """Factory function that can be used with copytree() ignore parameter.
+
+    Arguments define a sequence of glob-style patterns
+    that are used to specify what files to NOT ignore.
+    Creates and returns a function that determines this for each directory
+    in the file hierarchy rooted at the source directory when used with
+    shutil.copytree().
+    """
+    def _ignore_patterns(path, names):
+        keep = set(name for pattern in patterns
+                            for name in filter(names, pattern))
+        ignore = set(name for name in names
+                        if name not in keep and not isdir(join(path, name)))
+        return ignore
+    return _ignore_patterns
