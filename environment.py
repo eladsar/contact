@@ -93,7 +93,8 @@ class BulletEnv(Environment):
         self.render_mode = render_mode
         self.gamma = gamma
         # self.env = NormalizedActions(gym.make(name, render=render))
-        self.env = gym.make(name, render=render)
+        # self.env = gym.make(name, render=render)
+        self.env = gym.make(name)
 
         self.observation_space = self.env.observation_space
         self.action_space = self.env.action_space

@@ -1,4 +1,4 @@
-from config import args, exp
+from config import args, Experiment
 import numpy as np
 from loguru import logger
 import pandas as pd
@@ -37,7 +37,7 @@ def get_algorithm(*argv, **kwargs):
     raise NotImplementedError
 
 
-def reload(alg):
+def reload(alg, exp):
 
     aux = defaultdict(lambda: 0)
     if exp.load_model and args.reload:
@@ -49,8 +49,8 @@ def reload(alg):
     return aux
 
 
-def supervised(alg):
-    aux = reload(alg)
+def supervised(alg, exp):
+    aux = reload(alg, exp)
     n_offset = aux['n']
 
     # test_results = next(evaluation)
@@ -63,8 +63,8 @@ def supervised(alg):
         alg.save_checkpoint(exp.checkpoint, aux)
 
 
-def reinforcement(alg):
-    aux = reload(alg)
+def reinforcement(alg, exp):
+    aux = reload(alg, exp)
     n_offset = aux['n']
 
     for epoch, (train_results, test_results) in enumerate(alg.reinforcement_training()):
@@ -78,6 +78,8 @@ def reinforcement(alg):
 
 def main():
 
+    exp = Experiment()
+
     envs = {k: BulletEnv(args.environment, n_steps=args.n_steps, gamma=args.gamma,
                          norm_rewards=args.norm_rewards, norm_states=args.norm_states,
                          clip_obs=args.clip_obs, clip_rew=args.clip_rew) for k in ['env_train', 'env_eval']}
@@ -88,10 +90,10 @@ def main():
 
     if args.supervised:
         logger.info("Supervised Learning session")
-        supervised(alg)
+        supervised(alg, exp)
     elif args.reinforcement:
         logger.info("Reinforcement Learning session")
-        reinforcement(alg)
+        reinforcement(alg, exp)
     else:
         raise NotImplementedError
 

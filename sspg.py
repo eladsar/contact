@@ -1,9 +1,9 @@
 from model import MultipleOptimizer, QNet, PiNet
-from config import args, exp
+from config import args
 import torch
 from torch import nn
 import torch.nn.functional as F
-from sampler import UniversalBatchSampler, HexDataset
+from sampler import UniversalBatchSampler
 from alg import Algorithm
 from utils import soft_update, OrnsteinUhlenbeckActionNoise, RandomNoise, clipped_gd
 import torch.autograd as autograd

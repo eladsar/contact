@@ -1,10 +1,9 @@
-from config import args, exp
+from config import args
 import torch
 from torch import nn
 import torch.nn.functional as F
 import copy
 from collections import defaultdict
-from apex import amp
 from loguru import logger
 import warnings
 import itertools
@@ -29,9 +28,11 @@ class Algorithm(object):
         self.optimizers_dict = {}
 
         self.multi_gpu = False
-        self.device = exp.device
+
         for k, v in vars(args).items():
             setattr(self, k, v)
+
+        self.device = torch.device("cuda:%d" % self.cuda)
 
         self.replay_buffer = ReplayBuffer(self.replay_buffer_size)
         self.env_steps = 0
@@ -153,6 +154,7 @@ class Algorithm(object):
 
                     n = i * self.consecutive_train + j
                     train_results = self.replay_buffer_training(sample, train_results, n)
+
 
             if not i % self.max_episode_length:
                 train_results = self.episodic_training(train_results, self.max_episode_length)

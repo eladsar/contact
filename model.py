@@ -1,7 +1,7 @@
 from torch import nn
 import torch
 import torch.nn.functional as F
-from config import args, exp
+from config import args
 from torch.autograd import Function
 from collections import namedtuple
 from torchvision import transforms
@@ -13,6 +13,9 @@ from torch.distributions import constraints
 from torch.distributions.exp_family import ExponentialFamily
 from torch.distributions.utils import _standard_normal, broadcast_all
 from numbers import Number
+
+net_weights = {'sac': [256, 256], 'ppo': [64, 32]}
+
 
 class MultipleOptimizer:
     def __init__(self, *op):
@@ -564,29 +567,24 @@ class MedianNorm(nn.Module):
         return x
 
 
-class ActorTD3(Policy):
-    def __init__(self, state_dim, action_dim, distribution='deterministic', bounded=True):
-        super(ActorTD3, self).__init__(distribution, bounded=bounded)
+class ActorFC(Policy):
+    def __init__(self, state_dim, action_dim, distribution='deterministic', bounded=True, agent='sac'):
+        super(ActorFC, self).__init__(distribution, bounded=bounded)
 
-        # self.l1 = nn.Linear(state_dim, 256, bias=args.bias_p)
-        # self.l2 = nn.Linear(256, 256, bias=args.bias_p)
+        weights = net_weights[agent]
 
-        self.lin = nn.Sequential(nn.Linear(state_dim, 256, bias=args.bias_p),
-                                 # nn.LayerNorm(256, elementwise_affine=False),
-                                 # MedianNorm(),
+        self.lin = nn.Sequential(nn.Linear(state_dim, weights[0], bias=args.bias_p),
                                  nn.ReLU(),
-                                 nn.Linear(256, 256, bias=args.bias_p),
-                                 # nn.LayerNorm(256, elementwise_affine=False),
-                                 # MedianNorm(),
+                                 nn.Linear(weights[0], weights[1], bias=args.bias_p),
                                  nn.ReLU(),
                                  )
 
-        self.mu_head = nn.Linear(256, action_dim, bias=args.bias_p)
+        self.mu_head = nn.Linear(weights[1], action_dim, bias=args.bias_p)
 
         self.form = distribution
 
         if distribution in ['Normal', 'Uniform']:
-            self.std_head = nn.Linear(256, action_dim)
+            self.std_head = nn.Linear(weights[1], action_dim)
 
     def forward(self, s, evaluate=False):
 
@@ -602,7 +600,7 @@ class ActorTD3(Policy):
         else:
             params = {'loc': mu}
 
-        a = super(ActorTD3, self).forward(**params, evaluate=evaluate)
+        a = super(ActorFC, self).forward(**params, evaluate=evaluate)
         return a
 
 
@@ -681,15 +679,19 @@ class ActorTD3(Policy):
 #         return a
 
 
-class CriticTD3(nn.Module):
-    def __init__(self, state_dim, action_dim):
-        super(CriticTD3, self).__init__()
+class CriticFC(nn.Module):
+    def __init__(self, state_dim, action_dim, agent='sac'):
+        super(CriticFC, self).__init__()
 
+        weights = net_weights[agent]
         self.actions = action_dim
         # Q1 architecture
-        self.l1 = nn.Linear(state_dim + action_dim, 256)
-        self.l2 = nn.Linear(256, 256)
-        self.l3 = nn.Linear(256, 1)
+
+        self.lin = nn.Sequential(nn.Linear(state_dim + action_dim, weights[0]),
+                                 nn.ReLU(),
+                                 nn.Linear(weights[0], weights[1]),
+                                 nn.Linear(weights[1], 1),
+                                 )
 
     def forward(self, s, a=None):
 
@@ -705,10 +707,7 @@ class CriticTD3(nn.Module):
             else:
                 s = torch.cat([s, a], dim=-1)
 
-        s = F.relu(self.l1(s))
-        s = F.relu(self.l2(s))
-        q = self.l3(s)
-
+        q = self.lin(s)
         q = q.view(*shape[:-1], -1).squeeze(-1)
 
         return q
@@ -723,8 +722,8 @@ class CriticTD3(nn.Module):
 # QNet = Critic
 # PiNet = Actor
 
-QNet = CriticTD3
-PiNet = ActorTD3
+QNet = CriticFC
+PiNet = ActorFC
 
 #
 # class S2ANet(nn.Module):

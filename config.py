@@ -67,7 +67,8 @@ parser.add_argument('--max-episode-length', type=int, default=1000, metavar='STE
 
 # environment parameters
 
-parser.add_argument('--norm-rewards', type=str, default='none', help='Reward normalization')
+# parser.add_argument('--norm-rewards', type=str, default='none', help='Reward normalization')
+boolean_feature("norm-rewards", False, 'Reward normalization')
 boolean_feature("norm-states", False, 'State normalization')
 parser.add_argument('--clip-obs', type=float, default=0, help='Clip observations')
 parser.add_argument('--clip-rew', type=float, default=0, help='Clip rewards')
@@ -95,19 +96,25 @@ parser.add_argument('--start-policy-update', type=int, default=0, help='minimal 
 # RL parameters
 
 parser.add_argument('--gamma', type=float, default=0.99, help='Discount Factor')
-parser.add_argument('--lambda-gae', type=float, default=0.95, help='Discount Factor for GAE estimator')
 parser.add_argument('--epsilon', type=float, default=0.1, metavar='ε', help='exploration parameter')
-parser.add_argument('--eps-ppo', type=float, default=0.2, metavar='ε', help='PPO epsilon parameter')
-parser.add_argument('--target-kl', type=float, default=0.015, metavar='KL', help='Maximal KL distance in PPO optimization')
 parser.add_argument('--epsilon-warmup', type=float, default=0.1, metavar='ε', help='warm-up exploration parameter')
 parser.add_argument("--tau", default=0.005, type=float, help="Update factor for the soft update of the target networks")
 parser.add_argument('--target-update', type=int, default=1000, metavar='BATCHES', help='update targets every number of steps')
 
-parser.add_argument('--steps-per-episode', type=int, default=100, metavar='STEPS', help='number of optimization steps per episode for on-policy algorithms')
 parser.add_argument('--steps-per-train', type=int, default=1, metavar='STEPS', help='number of steps between training epochs')
 parser.add_argument('--consecutive-train', type=int, default=1, metavar='STEPS', help='number of consecutive training iterations')
 parser.add_argument('--replay-buffer-size', type=int, default=int(1e6), help='Total replay memory size')
 parser.add_argument('--n-steps', type=int, default=1, metavar='STEPS', help='Number of steps for multi-step learning')
+
+# PPO parameters
+
+parser.add_argument('--lambda-gae', type=float, default=0.95, help='Discount Factor for GAE estimator')
+parser.add_argument('--eps-ppo', type=float, default=0.2, metavar='ε', help='PPO epsilon parameter')
+parser.add_argument('--target-kl', type=float, default=0.015, metavar='KL', help='Maximal KL distance in PPO optimization')
+boolean_feature("batch-ppo", False, 'Use minibatches in ppo training')
+parser.add_argument('--steps-per-episode', type=int, default=80, metavar='STEPS', help='number of optimization steps per episode for on-policy algorithms')
+parser.add_argument('--ppo-averages', type=int, default=1, help='Number of gradient averages before optimization step')
+
 
 # rbi parameters
 parser.add_argument('--rbi-actor-samples', type=int, default=256, help='policy samples for rbi actor')
@@ -365,6 +372,3 @@ class Experiment(object):
         if args.tensorboard:
             self.writer.export_scalars_to_json(os.path.join(self.tensorboard_dir, "all_scalars.json"))
             self.writer.close()
-
-
-exp = Experiment()

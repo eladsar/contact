@@ -261,12 +261,58 @@ class Identity:
         pass
 
 
-def generalized_advantage_estimation(r, t, e, v1, v2, gamma, lambda_gae):
+# def generalized_advantage_estimation(r, t, e, v1, v2, gamma, lambda_gae, norm=False):
+#
+#     device = r.device
+#
+#     rewards = []
+#     discounted_reward = 0
+#     for reward, is_terminal in zip(r.flip(0), reversed(e.flip(0))):
+#         if is_terminal:
+#             discounted_reward = 0
+#         discounted_reward = reward + (gamma * discounted_reward)
+#         rewards.insert(0, discounted_reward)
+#
+#     # Normalizing the rewards:
+#     rewards = torch.tensor(rewards).to(device)
+#     rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-5)
+#
+#     advantages = rewards - v1.detach()
+#
+#     a = advantages
+#     v = rewards
+#
+#     return a, v
+
+
+mu = 0
+std = 1
+lr = 0.1
+
+
+def norm_r(r, e, gamma):
+
+    global mu
+    global std
+
+    mu_target = r.mean()
+    std_target = (r.std() + 1e-3) * max(1 - gamma, 1e-3, float(e.sum() / len(e))) * 10
+
+    mu = (1 - lr) * mu + lr * mu_target
+    std = (1 - lr) * std + lr * std_target
+
+    return (r - mu) / std
+
+
+def generalized_advantage_estimation(r, t, e, v1, v2, gamma, lambda_gae, norm=False):
 
     device = r.device
     b = torch.FloatTensor([1, 0]).to(device)
     aa = torch.FloatTensor([1, -gamma * lambda_gae]).to(device)
     av = torch.FloatTensor([1, -gamma]).to(device)
+
+    if norm:
+        r = norm_r(r, e, gamma)
 
     i = torch.nonzero(e).flatten()
     if len(i):
